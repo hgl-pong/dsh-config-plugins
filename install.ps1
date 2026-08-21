@@ -124,6 +124,10 @@ $registryPlugins = @(
   @('dsh-stylevault', 'github:GptsApp/dsh-stylevault'),
   @('dsh-vision-router', 'dsh-vision-router'),
 
+  # --- compaction backend (required by dsh-active-context-pruning's acp_compress;
+  #     provides ctx.compaction.compactRegion. auto:true by default = real auto compaction) ---
+  @('@deepseek-ai/dsh-compaction-basic', '@deepseek-ai/dsh-compaction-basic'),
+
   # --- developer-experience additions (verified, no conflict with the above) ---
   @('dsh-open-in-vscode', 'github:omdsh-dev/dsh-open-in-vscode'),
   @('@deepseek-ai/dsh-lsp', 'github:omdsh-dev/dsh-lsp'),
