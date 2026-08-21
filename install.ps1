@@ -99,38 +99,38 @@ $dshHome = [IO.Path]::GetFullPath($dshHome)
 # Install the patched package FIRST so its patch is not "unused" during later installs.
 Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-file-preview@0.1.9'
 Ensure-WorkspacePatch $dshHome
-Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin@0.1.26'
+Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin'
 if (-not $SkipSettings) { Ensure-ModelSettings $dshHome }
 
 # Each entry: @(bundleName, spec). bundleName is the resolved package name as
 # recorded in `dsh.profile.bundles`; it is used to skip already-installed plugins.
 $registryPlugins = @(
   @('@huanlin/dsh-plugin-session-delete', 'github:lsz-asd/dsh-plugin-session-delete'),
-  @('@tt-a1i/archify-dsh', '@tt-a1i/archify-dsh@0.1.0'),
+  @('@tt-a1i/archify-dsh', '@tt-a1i/archify-dsh'),
   @('dsh-active-context-pruning', 'github:aerince/dsh-active-context-pruning'),
   @('dsh-appearance-gallery', 'github:wsxwj123/dsh-plugins#path:/packages/dsh-appearance-gallery'),
   @('dsh-auto-collapse', 'github:a179-sanae/dsh-auto-collapse'),
   @('dsh-change-review', 'github:cirelir/dsh-change-review'),
-  @('dsh-context', 'dsh-context@0.19.2'),
-  @('dsh-cost-meter', 'dsh-cost-meter@1.5.30'),
-  @('dsh-crew', 'dsh-crew@0.7.0'),
-  @('dsh-extension-hub', 'dsh-extension-hub@0.2.18'),
-  @('dsh-history', 'dsh-history@0.1.24'),
-  @('dsh-myrules', 'dsh-myrules@0.1.1'),
+  @('dsh-context', 'dsh-context'),
+  @('dsh-cost-meter', 'dsh-cost-meter'),
+  @('dsh-crew', 'dsh-crew'),
+  @('dsh-extension-hub', 'dsh-extension-hub'),
+  @('dsh-history', 'dsh-history'),
+  @('dsh-myrules', 'dsh-myrules'),
   @('dsh-plan-switch', 'github:a903067276-rgb/dsh-plan-switch#main'),
   @('dsh-prompt-polish', 'github:jinhuoooo/dsh-prompt-polish'),
-  @('dsh-rewind-plugin', 'dsh-rewind-plugin@0.2.9'),
-  @('dsh-skill-picker', 'dsh-skill-picker@0.2.0'),
+  @('dsh-rewind-plugin', 'dsh-rewind-plugin'),
+  @('dsh-skill-picker', 'dsh-skill-picker'),
   @('dsh-stylevault', 'github:GptsApp/dsh-stylevault'),
-  @('dsh-vision-router', 'dsh-vision-router@1.7.3'),
+  @('dsh-vision-router', 'dsh-vision-router'),
 
   # --- developer-experience additions (verified, no conflict with the above) ---
-  @('dsh-open-in-vscode', 'https://github.com/omdsh-dev/dsh-open-in-vscode/archive/refs/tags/v0.1.6.tar.gz'),
+  @('dsh-open-in-vscode', 'github:omdsh-dev/dsh-open-in-vscode'),
   @('@deepseek-ai/dsh-lsp', 'github:omdsh-dev/dsh-lsp'),
   @('@dsh-external/dsh-sidechain', 'github:Buyi-wsgzg/dsh-sidechain'),
   @('@omdsh-dev/dsh-annotation', 'github:omdsh-dev/dsh-annotation'),
   @('@dsh-community/dsh-paste-input', 'github:omdsh-dev/dsh-paste-input'),
-  @('dsh-input-history', 'dsh-input-history@0.2.0'),
+  @('dsh-input-history', 'dsh-input-history'),
 
   # --- deterministic tools (reduce model hallucination) ---
   @('@deepseek-ai/dsh-tool-json', 'github:omdsh-dev/dsh-tool-json'),
