@@ -12,12 +12,6 @@ cd dsh-config-plugins
 .\install.cmd
 ```
 
-默认使用仓库内已经构建好的 `dsh-file` 产物。需要重新构建时：
-
-```powershell
-.\install.ps1 -BuildLocalEditor
-```
-
 安装完成后重启：
 
 ```powershell
@@ -26,11 +20,20 @@ dsh web --no-open
 
 ## 内容
 
-- `plugins/dsh-file`：Monaco 文件管理器，包含 C/C++、`CMakeLists.txt`、`.cmake` 的工程文件映射，以及 Monaco 失败时的本地高亮 fallback。
 - `plugins/dsh-local-sse-compat`：DeepSeek SSE 截断/空 payload 兼容和 compaction 专用请求调优。
 - `vendor/opencode-zen-compat`：原有 opencode Zen 兼容包的可迁移副本。
 - `patches/`：文件预览插件的路径拦截修复补丁。
 - `install.ps1`：完整插件安装清单、补丁应用和 DeepSeek `maxTokens: 65536` 配置修复。
+
+### 清单内附带的开发体验插件
+
+- `dsh-open-in-vscode`：从 Web GUI 一键在 VS Code 打开工作区目录。
+- `dsh-lsp`：LSP 语义工具（定义跳转 / 引用查找 / 诊断）。
+- `dsh-sidechain`：`/side` 持续侧会话 + `/btw` 一次性侧问（不污染主会话）。
+- `dsh-annotation`：选中文字 → 批注 → 随消息发送。
+- `dsh-paste-input`：Ctrl+V 粘贴 / 拖拽文件输入。
+- `dsh-input-history`：↑/↓ 召回历史输入。
+- `dsh-tool-*`（json / regex / csv / time / calculator / encoding）：确定性工具，减少模型幻觉。
 
 脚本可以重复运行；它只安装清单内插件，不会删除其他插件。
 
