@@ -39,17 +39,13 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   $workspaceFile = Join-Path $profile 'pnpm-workspace.yaml'
   $patchDir = Join-Path $profile 'patches'
   $patchName = '@wingsky-1__dsh-web-file-preview@0.1.9.patch'
+  $patchKey = '@wingsky-1/dsh-web-file-preview@0.1.9'
   New-Item -ItemType Directory -Force $profile, $patchDir | Out-Null
   if (-not (Test-Path $workspaceFile)) {
     @('packages:', '  - .', 'nodeLinker: hoisted', 'autoInstallPeers: false', '', 'dangerouslyAllowAllBuilds: true') |
       Set-Content -LiteralPath $workspaceFile -Encoding utf8
   }
   Copy-Item -LiteralPath (Join-Path $repoRoot "patches\$patchName") -Destination (Join-Path $patchDir $patchName) -Force
-  $text = Get-Content -Raw -LiteralPath $workspaceFile
-  if ($text -notmatch 'patchedDependencies:') { $text = $text.TrimEnd() + "`r`npatchedDependencies:`r`n" }
-  if ($text -notmatch [regex]::Escape($patchName)) {
-    $text = $text.TrimEnd() + "`r`n  '@wingsky-1/dsh-web-file-preview@0.1.9': patches/$patchName`r`n"
-  }
 
   # pnpm 10 blocks `prepare` scripts of git-hosted plugins unless their package
   # names are allowlisted. Write every git dependency's resolved package name
@@ -64,17 +60,61 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     '@deepseek-ai/dsh-tool-csv',
     '@deepseek-ai/dsh-tool-time',
     '@deepseek-ai/dsh-tool-calculator',
-    '@deepseek-ai/dsh-tool-encoding'
+    '@deepseek-ai/dsh-tool-encoding',
+    'dsh-stall-guard'
   )
-  if ($text -notmatch 'onlyBuiltDependencies:') {
-    $text = $text.TrimEnd() + "`r`nonlyBuiltDependencies:`r`n"
-  }
-  foreach ($pkg in $allowBuild) {
-    if ($text -notmatch [regex]::Escape("  - `"$pkg`"")) {
-      $text = $text.TrimEnd() + "`r`n  - `"$pkg`""
+
+  # --- structured merge: parse the existing workspace file into (a) top-level
+  #     scalar lines and (b) two name-keyed blocks, then rebuild in a fixed
+  #     order. This avoids the previous string-append bug where an entry could
+  #     be appended under the wrong block (e.g. under patchedDependencies). ---
+  $lines = (Get-Content -Raw -LiteralPath $workspaceFile) -split "`r?`n"
+  $patched = [ordered]@{}      # key -> value  (patchedDependencies block)
+  $built = [System.Collections.Generic.List[string]]::new()  # onlyBuiltDependencies list
+  $topLines = [System.Collections.Generic.List[string]]::new()
+  $currentBlock = $null
+  foreach ($ln in $lines) {
+    $trimmed = $ln.TrimEnd()
+    if ($trimmed -eq '' -or $trimmed -match '^\s*#') { continue }
+    if ($trimmed -match '^patchedDependencies:\s*$') { $currentBlock = 'patched'; continue }
+    if ($trimmed -match '^onlyBuiltDependencies:\s*$') { $currentBlock = 'built'; continue }
+    if ($trimmed -match '^\S') { $currentBlock = $null }   # new top-level key
+    if ($currentBlock -eq 'patched') {
+      if ($trimmed -match '^\s*([^:]+?)\s*:\s*(.+?)\s*$') {
+        $k = $Matches[1].Trim().Trim("'").Trim('"')
+        $v = $Matches[2].Trim().Trim("'").Trim('"')
+        $patched[$k] = $v
+      }
+    } elseif ($currentBlock -eq 'built') {
+      if ($trimmed -match '^\s*-\s*(.+?)\s*$') {
+        $built.Add($Matches[1].Trim().Trim("'").Trim('"')) > $null
+      }
+    } else {
+      $topLines.Add($trimmed) > $null
     }
   }
-  Set-Content -LiteralPath $workspaceFile -Value $text.TrimEnd() -Encoding utf8
+
+  # seed/ensure the patched entry
+  $patched[$patchKey] = "patches/$patchName"
+  # ensure every allow-listed build package is present (preserve order)
+  foreach ($pkg in $allowBuild) {
+    if ($built -notcontains $pkg) { $built.Add($pkg) > $null }
+  }
+
+  # rebuild: top-level scalars, then patchedDependencies, then onlyBuiltDependencies
+  $out = [System.Collections.Generic.List[string]]::new()
+  foreach ($ln in $topLines) { $out.Add($ln) > $null }
+  $out.Add('') > $null
+  $out.Add('patchedDependencies:') > $null
+  foreach ($kv in $patched.GetEnumerator()) {
+    $out.Add("  '$($kv.Key)': $($kv.Value)") > $null
+  }
+  $out.Add('') > $null
+  $out.Add('onlyBuiltDependencies:') > $null
+  foreach ($pkg in $built) {
+    $out.Add("  - `"$pkg`"") > $null
+  }
+  Set-Content -LiteralPath $workspaceFile -Value ($out -join "`r`n") -Encoding utf8
 }
 
 function Ensure-ModelSettings([string]$dshHome) {
@@ -143,6 +183,28 @@ $registryPlugins = @(
   @('@deepseek-ai/dsh-tool-time', 'github:omdsh-dev/dsh-tool-time'),
   @('@deepseek-ai/dsh-tool-calculator', 'github:omdsh-dev/dsh-tool-calculator'),
   @('@deepseek-ai/dsh-tool-encoding', 'github:omdsh-dev/dsh-tool-encoding')
+
+  # --- agent monitoring (verified no conflict with the above; dsh-cost-meter
+  #     already covers token/billing, so cost/quota panels are intentionally omitted) ---
+  @('dsh-traffic-light', 'dsh-traffic-light'),                 # per-session status light (read-only UI)
+  @('dsh-stall-guard', 'github:akira399/dsh-stall-guard'),     # watchdog: detects truly stalled turns
+  @('dsh-trace-compare', 'dsh-trace-compare'),                 # agent trajectory visualizer (session logs)
+  @('dsh-schedule', 'dsh-schedule')                            # cron + /status system/agent monitor page
+
+  # === C++ dev-experience audit (verified against npm registry; DO NOT add blindly) ===
+  # Reviewed candidates for improving the C++ workflow. None qualified for inclusion:
+  # - dsh-terminal@0.1.1 : real PTY panel (xterm.js + node-pty), but OVERLAPS with the
+  #     already-installed dsh-workbench-plugin@0.1.26, which already bundles node-pty +
+  #     @xterm/xterm + file/Git/editor UI. Adding it is redundant (double native build).
+  # - dsh-cpp / dsh-git / dsh-files : exist on npm but are empty placeholders
+  #     ("name reserved; first release in development") — tarball ships only
+  #     package.json + README, no code, no cordis patch. Skip until they ship real impl.
+  # - dsh-theme / dsh-notify / dsh-voice : real & installable, but unrelated to C++ dev
+  #     (themes / Windows toast / TTS-STT). Left out on purpose.
+  # Net result: the active C++-relevant stack is already covered by dsh-lsp +
+  # dsh-open-in-vscode + dsh-workbench-plugin + dsh-vision-router. Gaps that have NO
+  # mature dsh plugin yet (cmake build+error feedback, clang-format/tidy, GTest/Catch2
+  # runner, GDB frontend) must be solved via a local cordis patch, not an npm package.
 )
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
 
