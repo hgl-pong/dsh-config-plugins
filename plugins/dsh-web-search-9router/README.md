@@ -31,7 +31,7 @@ dsh plugin --profile web add F:\AITools\dsh-config-plugins\plugins\dsh-web-searc
 
 | 字段 | 说明 | 默认 |
 |---|---|---|
-| `baseURL` | 调用链接（9Router 服务地址）。留空使用默认；非空时须为合法的 `http(s)://` 地址，否则保存被拦截并提示 | `https://ninerouter.com` |
+| `baseURL` | 调用链接（9Router 服务地址）。留空使用默认；非空时须为合法的 `http(s)://` 地址，否则保存被拦截并提示 | `http://localhost:20128` |
 | `apiKey` | API key（secret 字段：界面不回显，留空保存 = 保持现值；徽标显示是否已配置） | 空 |
 | `searchProvider` | 默认搜索 provider/model。下拉选择已知 provider（tavily/exa/brave/serper/searxng/google-pse/linkup/searchapi/youcom/perplexity/combo），也保留自定义值 | `tavily` |
 
@@ -48,7 +48,7 @@ dsh plugin --profile web add F:\AITools\dsh-config-plugins\plugins\dsh-web-searc
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `NINEROUTER_URL` | 9Router 服务地址 | `https://ninerouter.com` |
+| `NINEROUTER_URL` | 9Router 服务地址 | `http://localhost:20128` |
 | `NINEROUTER_KEY` | 鉴权 key（9Router 开启 auth 时必填） | 无 |
 | `NINEROUTER_SEARCH_PROVIDER` | 默认搜索 provider/model | `tavily` |
 

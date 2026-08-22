@@ -7,7 +7,7 @@
 #    固定跳过，禁用后也更干净、并避免潜在的可用 provider 歧义）。
 #
 # 环境变量：
-#   NINEROUTER_URL  9Router 服务地址（默认 https://ninerouter.com）
+#   NINEROUTER_URL  9Router 服务地址（默认 http://localhost:20128）
 #   NINEROUTER_KEY  鉴权 key（若 9Router 开启了 auth）
 #   NINEROUTER_SEARCH_PROVIDER  默认搜索 provider/model（默认 tavily；支持 exa / brave / serper /
 #     searxng / google-pse / linkup / searchapi / youcom / perplexity，也支持 combo）

@@ -16,6 +16,9 @@ DSH 插件：控制 ACP 压缩（compaction / compact）使用的模型与 provi
 也可以在本插件 settings 命名空间 `dsh-compact-model`（字段 `provider`、`model`）
 里配置，供设置页读写。
 
+Web 设置页由插件内置的 `client.js` 注册配置卡片，provider/model 从 `llm-pi-ai` 文件配置中读取，
+只列出支持关闭推理的模型，并支持调参、保存和放弃修改。
+
 ## 工作原理
 
 1. 从 `llm-pi-ai` settings 命名空间读取 provider/model 目录，过滤出所有

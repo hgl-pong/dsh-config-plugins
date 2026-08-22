@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
       title: '联网搜索（9Router）',
       description: '用 9Router 的 /v1/search 替换内置 DeepSeek 联网搜索。',
       baseUrl: '调用链接',
-      baseUrlHint: '9Router 服务地址，留空使用默认 https://ninerouter.com。',
+      baseUrlHint: '9Router 服务地址，留空使用默认 http://localhost:20128。',
       searchProvider: '搜索 provider',
       searchProviderHint: 'tavily / exa / brave / serper / searxng / google-pse / linkup / searchapi / youcom / perplexity / combo。',
       apiKey: 'API Key',
@@ -70,7 +70,7 @@ window.__ModuleLoader__.load({
       title: 'Web search (9Router)',
       description: 'Replaces the built-in DeepSeek web search with 9Router /v1/search.',
       baseUrl: 'Endpoint',
-      baseUrlHint: '9Router service URL; leave blank for the default https://ninerouter.com.',
+      baseUrlHint: '9Router service URL; leave blank for the default http://localhost:20128.',
       searchProvider: 'Search provider',
       searchProviderHint: 'tavily / exa / brave / serper / searxng / google-pse / linkup / searchapi / youcom / perplexity / combo.',
       apiKey: 'API key',
@@ -147,7 +147,11 @@ window.__ModuleLoader__.load({
         // 读取 secret 字段“已配置”的确认回调。secret 字面量会被 wire 端的
         // redactSecrets 从响应里剥掉，绝不能像普通字段那样用字面量回读校验，
         // 只能通过 describe 视图的 secrets 边车确认写入是否落盘。
+        // Secret values are confirmed through the Host describe sidecar;
+        // their literal value never enters the browser response.
         this.confirmSecret = options.confirmSecret;
+        this.onSecretState = options.onSecretState;
+        this.unsetField = options.unsetField;
         scope.subscribe(() => this.publish());
       }
 
@@ -274,7 +278,16 @@ window.__ModuleLoader__.load({
         this.clearSavedTimer();
         this.publish();
         let landed = true;
-        for (const write of writes) landed = (await write()) && landed;
+        try {
+          for (const write of writes) {
+            const result = await write();
+            landed = result !== false && landed;
+          }
+        } catch {
+          // A rejected settings write must not leave the card permanently in
+          // the saving state; the staged values remain available for retry.
+          landed = false;
+        }
         if (landed) {
           this.staged.clear();
           this.secretStaged = '';
@@ -293,13 +306,15 @@ window.__ModuleLoader__.load({
 
       /** 写入即视为已落盘：scope.set resolve 即代表 wire 提交成功。 */
       async store(field, value) {
-        await this.scope.set(field, value);
-        return true;
+        const result = await this.scope.set(field, value);
+        return result !== false;
       }
 
       async clear(field) {
-        await this.scope.unset(field);
-        return true;
+        const result = typeof this.scope.unset === 'function'
+          ? await this.scope.unset(field)
+          : (typeof this.unsetField === 'function' ? await this.unsetField(field) : false);
+        return result !== false;
       }
 
       /**
@@ -307,13 +322,17 @@ window.__ModuleLoader__.load({
        * 恒为失败，故以 `scope.set` resolve 作为落盘依据（与普通字段一致）。
        */
       async storeSecretValue(value) {
-        await this.scope.set('apiKey', value);
-        return true;
+        const result = await this.scope.set('apiKey', value);
+        if (result !== false) this.onSecretState?.(true);
+        return result !== false;
       }
 
       async clearSecretValue() {
-        await this.scope.unset('apiKey');
-        return true;
+        const result = typeof this.scope.unset === 'function'
+          ? await this.scope.unset('apiKey')
+          : (typeof this.unsetField === 'function' ? await this.unsetField('apiKey') : false);
+        if (result !== false) this.onSecretState?.(false);
+        return result !== false;
       }
 
       secretClear = false;
@@ -343,21 +362,71 @@ window.__ModuleLoader__.load({
      * secrets 边车读取 apiKey 是否已配置（字面量永远不会出现在响应里）。
      */
     class NineRouterCardController {
-      constructor(scope) {
+      constructor(scope, ctx) {
         this.scope = scope;
+        this.ctx = ctx;
+        this.secretSet = false;
         this.form = new CardForm(scope, [urlField('baseURL'), textField('searchProvider')], {
           confirmSecret: () => this.secretConfigured(),
+          unsetField: (field) => this.unsetField(field),
+          onSecretState: (set) => {
+            this.secretSet = set;
+            this.form.publish();
+            this.refreshSecretState();
+          },
         });
         this.store = this.form.bind(() => this.projection());
+        this.ctx.on('settings/changed', (namespace) => {
+          if (namespace === undefined || namespace === NAMESPACE) this.refreshSecretState();
+        });
+        this.ctx.on('connection/reset', () => this.refreshSecretState());
+        this.refreshSecretState();
       }
 
-      /** 从 describe 视图的 secrets 边车读取 apiKey 是否已配置（字面量永不出现在响应里）。 */
+      /** 从 describe 视图的 secrets 边车读取 apiKey 是否已配置（不读取密钥本身）。 */
       secretConfigured() {
-        const snapshot = this.scope.getSnapshot();
-        const secret = (snapshot.view?.secrets ?? []).find(
-          (item) => Array.isArray(item.path) && item.path[0] === 'apiKey'
-        );
-        return secret?.set === true;
+        return this.secretSet;
+      }
+
+      async refreshSecretState() {
+        let connection;
+        try {
+          connection = this.ctx.get('connection');
+          const settings = connection?.api?.settings;
+          if (typeof settings?.describe !== 'function') return;
+          const response = await settings.describe({});
+          const namespaces = response?.result?.ok === true
+            ? response.result.value?.namespaces
+            : undefined;
+          const view = Array.isArray(namespaces)
+            ? namespaces.find((item) => item?.ns === NAMESPACE)
+            : undefined;
+          const secret = (view?.secrets ?? []).find(
+            (item) => Array.isArray(item.path) && item.path.length === 1 && item.path[0] === 'apiKey'
+          );
+          this.secretSet = secret?.set === true;
+          this.form.publish();
+        } catch {
+          // The settings scope can still save values when the sidecar read is
+          // unavailable; keep the last known state and avoid breaking the card.
+        }
+      }
+
+      async unsetField(field) {
+        try {
+          const connection = this.ctx.get('connection');
+          const settings = connection?.api?.settings;
+          if (typeof settings?.mutate !== 'function') return false;
+          const revision = this.scope.getSnapshot().revision;
+          const response = await settings.mutate({
+            ns: NAMESPACE,
+            ops: [{ op: 'unset', path: [field] }],
+            ...(revision === undefined ? {} : { expectedRevision: revision }),
+          });
+          return response?.result?.ok === true;
+        } catch {
+          return false;
+        }
       }
 
       projection() {
@@ -648,7 +717,8 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-web-search-9router: dictionaries');
       const controller = new NineRouterCardController(
-        ctx.settingsScope.bind({ namespace: NAMESPACE })
+        ctx.settingsScope.bind({ namespace: NAMESPACE }),
+        ctx
       );
       ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
         name: 'settings.plugin.item',

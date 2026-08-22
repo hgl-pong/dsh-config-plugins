@@ -131,10 +131,10 @@ export function isEligiblePair(providers, provider, model) {
 export function applySelection(options, selection) {
   if (!options || typeof options !== 'object') return options
   if (options.purpose !== 'compaction') return options
-  const provider = selection?.provider
-  const model = selection?.model
-  if (typeof provider !== 'string' || provider.length === 0) return options
-  if (typeof model !== 'string' || model.length === 0) return options
+  const provider = typeof selection?.provider === 'string' ? selection.provider.trim() : ''
+  const model = typeof selection?.model === 'string' ? selection.model.trim() : ''
+  if (provider.length === 0) return options
+  if (model.length === 0) return options
   try {
     options.provider = provider
     options.model = model
@@ -142,6 +142,13 @@ export function applySelection(options, selection) {
     // never let a rewrite failure break the request
   }
   return options
+}
+
+/** Parse `/compact-model provider/model`, keeping slashes in the model id. */
+export function parseSelectionInput(rawInput) {
+  const text = typeof rawInput === 'string' ? rawInput.trim() : ''
+  const match = /^([^\s/]+)\/([^\s]+)$/.exec(text)
+  return match ? { provider: match[1], model: match[2] } : null
 }
 
 /**
@@ -157,16 +164,20 @@ export function applySelection(options, selection) {
  */
 export function buildEngineConfigOverrides(value) {
   const out = {}
-  const provider = typeof value?.provider === 'string' ? value.provider : ''
-  const model = typeof value?.model === 'string' ? value.model : ''
+  const provider = typeof value?.provider === 'string' ? value.provider.trim() : ''
+  const model = typeof value?.model === 'string' ? value.model.trim() : ''
   if (provider.length > 0 && model.length > 0) {
     out.summarizationProvider = provider
     out.summarizationModel = model
   }
-  const num = (key, fallback) =>
-    typeof value?.[key] === 'number' && Number.isFinite(value[key]) ? value[key] : fallback
-  let thresholdRatio = num('thresholdRatio', configDefaults.thresholdRatio)
-  let retainRatio = num('retainRatio', configDefaults.retainRatio)
+  function numberOrFallback(key, fallback, valid) {
+    const candidate = value?.[key]
+    return typeof candidate === 'number' && Number.isFinite(candidate) && valid(candidate)
+      ? candidate
+      : fallback
+  }
+  let thresholdRatio = numberOrFallback('thresholdRatio', configDefaults.thresholdRatio, (n) => n >= 0.01 && n <= 1)
+  let retainRatio = numberOrFallback('retainRatio', configDefaults.retainRatio, (n) => n >= 0 && n <= 0.99)
   if (!(retainRatio < thresholdRatio)) {
     // 非法组合：引擎要求 retain < threshold。回退到默认安全值。
     thresholdRatio = configDefaults.thresholdRatio
@@ -174,9 +185,10 @@ export function buildEngineConfigOverrides(value) {
   }
   out.thresholdRatio = thresholdRatio
   out.retainRatio = retainRatio
-  out.maxTokens = num('maxTokens', configDefaults.maxTokens)
-  out.compactionRetries = num('compactionRetries', configDefaults.compactionRetries)
-  out.maxOverflowRetries = num('maxOverflowRetries', configDefaults.maxOverflowRetries)
+  out.maxTokens = numberOrFallback('maxTokens', configDefaults.maxTokens, Number.isInteger)
+  if (out.maxTokens < 1) out.maxTokens = configDefaults.maxTokens
+  out.compactionRetries = numberOrFallback('compactionRetries', configDefaults.compactionRetries, (n) => Number.isInteger(n) && n >= 0)
+  out.maxOverflowRetries = numberOrFallback('maxOverflowRetries', configDefaults.maxOverflowRetries, (n) => Number.isInteger(n) && n >= 0)
   if (typeof value?.auto === 'boolean') out.auto = value.auto
   return out
 }
@@ -194,12 +206,20 @@ export function buildEngineConfigOverrides(value) {
  * @returns 是否成功应用到引擎。
  */
 export function applyEngineConfig(ctx, value) {
-  const compaction = ctx?.get?.('compaction') ?? ctx?.compaction
-  if (compaction == null || typeof compaction !== 'object' || compaction.config == null) {
-    return false
-  }
   try {
-    compaction.config = { ...compaction.config, ...buildEngineConfigOverrides(value) }
+    const compaction = ctx?.get?.('compaction') ?? ctx?.compaction
+    if (compaction == null || typeof compaction !== 'object' || compaction.config == null) {
+      return false
+    }
+    const overrides = buildEngineConfigOverrides(value)
+    // The compaction service resolves these fields as strings and calls
+    // `.length`; an empty pair is its documented "inherit the request target"
+    // sentinel. Set it here so clearing a selection does not retain stale keys.
+    if (!Object.hasOwn(overrides, 'summarizationProvider')) {
+      overrides.summarizationProvider = ''
+      overrides.summarizationModel = ''
+    }
+    compaction.config = { ...compaction.config, ...overrides }
     return true
   } catch {
     return false
@@ -297,11 +317,12 @@ export async function apply(ctx, config) {
         const eligible = listEligibleModels(providers)
         const sel = selection()
 
-        const text = rawInput.trim()
         // 形如 "provider/model" 的直接设置
-        const direct = /^\s*([^\s/]+)\/([^\s/]+)\s*$/.exec(text)
+        // Model ids commonly contain slashes (for example `org/model`), so
+        // split only at the provider/model separator.
+        const direct = parseSelectionInput(rawInput)
         if (direct) {
-          const [, provider, model] = direct
+          const { provider, model } = direct
           const check = isEligiblePair(providers, provider, model)
           if (!check.ok) return { kind: 'error', text: check.reason }
           const wrote = persist(provider, model)

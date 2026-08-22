@@ -18,7 +18,7 @@
  * 配置优先级：设置页/entry 配置 > 环境变量 > 内置默认。
  *
  * 环境变量（作为设置页的兜底）：
- *   NINEROUTER_URL               9Router 服务地址（默认 https://ninerouter.com）
+ *   NINEROUTER_URL               9Router 服务地址（默认 http://localhost:20128）
  *   NINEROUTER_KEY               鉴权 key（9Router 开启 auth 时需要）
  *   NINEROUTER_SEARCH_PROVIDER   默认搜索 provider/model（默认 tavily）
  */
@@ -38,7 +38,7 @@ export const USER_AGENT = 'dsh-web-search-9router/0.1.0'
 /** 设置页命名空间（小写 kebab-case）。 */
 export const NINEROUTER_SETTINGS_NAMESPACE = 'dsh-web-search-9router'
 
-/** entry 配置的默认值（cordis.patch.yml 未给 config 时的 schema 兜底）。
+/** 内置默认值（仅在环境变量和设置均未提供时使用）。
  * apiKey 刻意缺席：role('secret') 字段带默认值会让 redactSecrets 的
  * `set: value !== undefined` 恒为 true，设置页就永远显示“已配置”。 */
 export const configDefaults = Object.freeze({
@@ -46,11 +46,22 @@ export const configDefaults = Object.freeze({
   searchProvider: DEFAULT_SEARCH_PROVIDER
 })
 
+function stringOrUndefined(value) {
+  return typeof value === 'string' ? value : undefined
+}
+
+function stripTrailingSlashes(value) {
+  return value.replace(/\/+$/, '')
+}
+
 /** 从环境变量读取配置（可注入 env 便于测试）。 */
 export function resolveEnv(env = process.env) {
-  const baseURL = (env.NINEROUTER_URL || DEFAULT_NINEROUTER_URL).replace(/\/+$/, '')
-  const provider = env.NINEROUTER_SEARCH_PROVIDER || DEFAULT_SEARCH_PROVIDER
-  const apiKey = env.NINEROUTER_KEY
+  const rawURL = stringOrUndefined(env?.NINEROUTER_URL)?.trim()
+  const rawProvider = stringOrUndefined(env?.NINEROUTER_SEARCH_PROVIDER)?.trim()
+  const rawKey = stringOrUndefined(env?.NINEROUTER_KEY)?.trim()
+  const baseURL = stripTrailingSlashes(rawURL || DEFAULT_NINEROUTER_URL)
+  const provider = rawProvider || DEFAULT_SEARCH_PROVIDER
+  const apiKey = rawKey || undefined
   return { baseURL, provider, apiKey }
 }
 
@@ -62,9 +73,12 @@ export function resolveEnv(env = process.env) {
  */
 export function resolveOptions(section, env = process.env) {
   const ambient = resolveEnv(env)
-  const baseURL = (section?.baseURL?.trim() || ambient.baseURL).replace(/\/+$/, '')
-  const provider = section?.searchProvider?.trim() || ambient.provider
-  const apiKey = section?.apiKey?.trim() || ambient.apiKey
+  const configuredURL = stringOrUndefined(section?.baseURL)?.trim()
+  const configuredProvider = stringOrUndefined(section?.searchProvider)?.trim()
+  const configuredKey = stringOrUndefined(section?.apiKey)?.trim()
+  const baseURL = stripTrailingSlashes(configuredURL || ambient.baseURL)
+  const provider = configuredProvider || ambient.provider
+  const apiKey = configuredKey || ambient.apiKey
   return { baseURL, provider, apiKey }
 }
 
@@ -80,16 +94,18 @@ export function mapNineRouterResponse(payload) {
   const rawResults = Array.isArray(payload?.results) ? payload.results : []
   const sources = []
   for (const item of rawResults) {
-    if (!item || typeof item.url !== 'string' || item.url.length === 0) continue
+    if (!item || typeof item.url !== 'string' || item.url.trim().length === 0) continue
+    const url = item.url.trim()
+    const publishedAt = typeof item.published_at === 'string' ? item.published_at : item.publishedAt
     sources.push({
-      url: item.url,
+      url,
       ...(typeof item.title === 'string' && item.title.length > 0 ? { title: item.title } : {}),
       ...(typeof item.snippet === 'string' && item.snippet.length > 0 ? { snippet: item.snippet } : {}),
-      ...(typeof item.published_at === 'string' && item.published_at.length > 0 ? { publishedAt: item.published_at } : {})
+      ...(typeof publishedAt === 'string' && publishedAt.length > 0 ? { publishedAt } : {})
     })
   }
   return {
-    ...(typeof payload?.answer === 'string' && payload.answer.length > 0 ? { content: payload.answer } : {}),
+    ...(typeof payload?.answer === 'string' && payload.answer.trim().length > 0 ? { content: payload.answer } : {}),
     sources,
     truncated: false
   }
@@ -100,10 +116,11 @@ export function mapNineRouterResponse(payload) {
  * 作为成本/延迟优化；web seam 无论 provider 是否返回更多都会强制执行该上限。
  */
 export function buildSearchBody(request, provider) {
+  const input = request && typeof request === 'object' ? request : {}
   return {
     model: provider,
-    query: request.query,
-    ...(Number.isInteger(request.maxResults) && request.maxResults > 0 ? { max_results: request.maxResults } : {})
+    query: typeof input.query === 'string' ? input.query : '',
+    ...(Number.isInteger(input.maxResults) && input.maxResults > 0 ? { max_results: input.maxResults } : {})
   }
 }
 
@@ -117,7 +134,7 @@ export class NineRouterSearchProvider {
   /** 纯本地可用性检查：必须有可解析的 baseURL 和搜索 provider。 */
   available() {
     const { baseURL, provider } = this.resolveOptions()
-    return typeof baseURL === 'string' && baseURL.length > 0 && URL.canParse(baseURL) &&
+    return isHttpURL(baseURL) &&
       typeof provider === 'string' && provider.length > 0
   }
 
@@ -162,9 +179,11 @@ export class NineRouterSearchProvider {
     try {
       payload = await response.json()
     } catch (error) {
+      if (signal?.aborted === true || isAbortError(error)) throw abortError(signal, error, WebError)
       throw new WebError(`9Router returned an unprocessable response body: ${String(error)}`, 'WEB_PROVIDER_ERROR', { cause: error })
     }
-    if (!Array.isArray(payload?.results) || payload.results.length === 0) {
+    const hasAnswer = typeof payload?.answer === 'string' && payload.answer.trim().length > 0
+    if (!hasAnswer && (!Array.isArray(payload?.results) || payload.results.length === 0)) {
       throw new WebError('9Router returned no results for the query', 'WEB_PROVIDER_ERROR')
     }
     return mapNineRouterResponse(payload)
@@ -172,7 +191,10 @@ export class NineRouterSearchProvider {
 }
 
 export async function apply(ctx, config) {
-  const entry = { ...configDefaults, ...(config ?? {}) }
+  // Keep omitted settings absent so environment variables can remain the
+  // documented fallback. Schema defaults are intentionally `undefined` below;
+  // resolveOptions supplies the built-in defaults only after env resolution.
+  const entry = { ...(config ?? {}) }
   let current = () => entry
   // 惰性挂载设置页：仅当 DSH 的 settings 服务与 schema 可用时安装；任何失败
   // （依赖缺失、settings 服务未挂载）都降级为 entry+环境变量，但不静默——
@@ -180,8 +202,8 @@ export async function apply(ctx, config) {
   try {
     const { default: z } = await import('@deepseek-ai/schemastery')
     const Config = z.object({
-      baseURL: z.string().default(DEFAULT_NINEROUTER_URL),
-      searchProvider: z.string().default(DEFAULT_SEARCH_PROVIDER),
+      baseURL: z.string().default(undefined),
+      searchProvider: z.string().default(undefined),
       // secret 字段不能带 default：redactSecrets 以 value !== undefined 判定
       // “已配置”，带默认值会让设置页永远显示已配置（官方 web-search-deepseek 同此约定）。
       apiKey: z.string().role('secret')
@@ -227,5 +249,11 @@ function abortError(signal, fallback, WebError) {
 }
 
 function isAbortError(error) {
-  return typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError'
+  return error?.name === 'AbortError'
+}
+
+function isHttpURL(value) {
+  if (typeof value !== 'string' || value.length === 0 || !URL.canParse(value)) return false
+  const protocol = new URL(value).protocol
+  return protocol === 'http:' || protocol === 'https:'
 }

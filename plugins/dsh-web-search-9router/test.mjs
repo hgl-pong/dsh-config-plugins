@@ -27,6 +27,13 @@ test('resolveEnv reads env with defaults and strips trailing slashes', () => {
   assert.equal(def.apiKey, undefined)
 })
 
+test('resolveEnv tolerates malformed non-string environment values', () => {
+  const env = resolveEnv({ NINEROUTER_URL: 42, NINEROUTER_KEY: null, NINEROUTER_SEARCH_PROVIDER: '  ' })
+  assert.equal(env.baseURL, DEFAULT_NINEROUTER_URL)
+  assert.equal(env.provider, DEFAULT_SEARCH_PROVIDER)
+  assert.equal(env.apiKey, undefined)
+})
+
 test('resolveOptions prefers settings section over env and defaults', () => {
   const env = { NINEROUTER_URL: 'https://env.example/', NINEROUTER_KEY: 'env-key', NINEROUTER_SEARCH_PROVIDER: 'exa' }
   // 设置页/entry 值优先
@@ -46,7 +53,7 @@ test('mapNineRouterResponse maps results and answer', () => {
     answer: 'summary',
     results: [
       { title: 'T', url: 'https://a.example', snippet: 's', published_at: '2024-01-01' },
-      { url: 'https://b.example' },
+      { url: 'https://b.example', publishedAt: '2024-01-02' },
       { url: '' },
       null
     ]
@@ -55,7 +62,7 @@ test('mapNineRouterResponse maps results and answer', () => {
   assert.equal(out.truncated, false)
   assert.equal(out.sources.length, 2)
   assert.deepEqual(out.sources[0], { url: 'https://a.example', title: 'T', snippet: 's', publishedAt: '2024-01-01' })
-  assert.deepEqual(out.sources[1], { url: 'https://b.example' })
+  assert.deepEqual(out.sources[1], { url: 'https://b.example', publishedAt: '2024-01-02' })
 })
 
 test('mapNineRouterResponse omits answer when absent and tolerates malformed payload', () => {
@@ -70,8 +77,38 @@ test('buildSearchBody passes maxResults through', () => {
   assert.deepEqual(buildSearchBody({ query: 'q' }, 'tavily'), { model: 'tavily', query: 'q' })
 })
 
+test('map-only 9Router answers are accepted by search', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ answer: 'answer', results: [] })
+  })
+  try {
+    const provider = new NineRouterSearchProvider(() => ({ baseURL: 'http://x', provider: 'tavily' }))
+    const result = await provider.search({ query: 'q' })
+    assert.equal(result.content, 'answer')
+    assert.deepEqual(result.sources, [])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('search accepts an answer payload without a results field', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) })
+  try {
+    const provider = new NineRouterSearchProvider(() => ({ baseURL: 'http://x', provider: 'tavily' }))
+    const result = await provider.search({ query: 'q' })
+    assert.equal(result.content, 'answer')
+    assert.deepEqual(result.sources, [])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('available() requires a parseable baseURL and provider', () => {
   assert.equal(new NineRouterSearchProvider(() => ({ baseURL: 'http://x', provider: 'tavily' })).available(), true)
   assert.equal(new NineRouterSearchProvider(() => ({ baseURL: 'not a url', provider: 'tavily' })).available(), false)
+  assert.equal(new NineRouterSearchProvider(() => ({ baseURL: 'file:///tmp/x', provider: 'tavily' })).available(), false)
   assert.equal(new NineRouterSearchProvider(() => ({ baseURL: 'http://x', provider: '' })).available(), false)
 })

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isDeepSeekProvider, repairStream, tuneCompactionOptions } from './index.js'
+import { apply, isDeepSeekProvider, repairStream, tuneCompactionOptions } from './index.js'
 
 async function collect(source) {
   const result = []
@@ -44,4 +44,31 @@ test('preserves unrelated stream failures', async () => {
     })()),
     /provider authentication failed/,
   )
+})
+
+test('recognizes recoverable finish errors in both failure and error shapes', async () => {
+  const source = (async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'text' }
+    yield { type: 'text-delta', index: 0, text: 'partial' }
+    yield {
+      type: 'finish',
+      reason: { kind: 'error', error: { code: 'STREAM_CLOSED', message: 'SSE stream ended' } }
+    }
+  })()
+  const result = []
+  for await (const chunk of repairStream(source)) result.push(chunk)
+  assert.equal(result.at(-1).reason.kind, 'stop')
+})
+
+test('does not tune non-DeepSeek streams', async () => {
+  let seen
+  const ctx = {
+    on: (_event, listener) => { seen = listener }
+  }
+  apply(ctx)
+  const options = { provider: 'agnes', purpose: 'compaction', reasoningEffort: 'high', maxTokens: 1024 }
+  const next = () => (async function* () {})()
+  seen(options, next)
+  assert.equal(options.reasoningEffort, 'high')
+  assert.equal(options.maxTokens, 1024)
 })

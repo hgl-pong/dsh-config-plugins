@@ -5,6 +5,7 @@ import {
   listEligibleModels,
   isEligiblePair,
   applySelection,
+  parseSelectionInput,
   buildEngineConfigOverrides,
   applyEngineConfig,
   configDefaults,
@@ -125,6 +126,14 @@ test('applySelection: empty selection leaves call untouched', () => {
   assert.equal(out.model, 'v4')
 })
 
+test('parseSelectionInput preserves slashes in model ids', () => {
+  assert.deepEqual(parseSelectionInput('router/cbcn/deepseek-v4-flash'), {
+    provider: 'router',
+    model: 'cbcn/deepseek-v4-flash'
+  })
+  assert.equal(parseSelectionInput('not-a-pair'), null)
+})
+
 test('buildEngineConfigOverrides: maps provider/model to summarization target', () => {
   const overrides = buildEngineConfigOverrides({ provider: 'agnes', model: 'agnes-2.5-flash' })
   assert.equal(overrides.summarizationProvider, 'agnes')
@@ -161,6 +170,29 @@ test('buildEngineConfigOverrides: empty provider/model yields no summarization p
   const overrides = buildEngineConfigOverrides({ provider: '', model: '' })
   assert.equal(overrides.summarizationProvider, undefined)
   assert.equal(overrides.summarizationModel, undefined)
+})
+
+test('buildEngineConfigOverrides: rejects invalid numeric ranges', () => {
+  const overrides = buildEngineConfigOverrides({
+    thresholdRatio: 2,
+    retainRatio: -1,
+    maxTokens: 0,
+    compactionRetries: 1.5,
+    maxOverflowRetries: -2
+  })
+  assert.equal(overrides.thresholdRatio, configDefaults.thresholdRatio)
+  assert.equal(overrides.retainRatio, configDefaults.retainRatio)
+  assert.equal(overrides.maxTokens, configDefaults.maxTokens)
+  assert.equal(overrides.compactionRetries, configDefaults.compactionRetries)
+  assert.equal(overrides.maxOverflowRetries, configDefaults.maxOverflowRetries)
+})
+
+test('applyEngineConfig clears a previous summarization override', () => {
+  const engine = { config: { summarizationProvider: 'old', summarizationModel: 'old-model' } }
+  const ctx = { get: () => engine }
+  assert.equal(applyEngineConfig(ctx, { provider: '', model: '' }), true)
+  assert.equal(engine.config.summarizationProvider, '')
+  assert.equal(engine.config.summarizationModel, '')
 })
 
 test('applyEngineConfig: merges overrides into compaction engine config', () => {

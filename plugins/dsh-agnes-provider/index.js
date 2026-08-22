@@ -42,11 +42,18 @@ export function tuneAgnesOptions(options) {
     const effort = options.reasoningEffort
     // Agnes only supports an on/off thinking toggle: any non-"off" effort
     // requests thinking, and "off" explicitly disables it.
-    const enableThinking = effort != null && String(effort) !== 'off'
-    options.chatTemplateKwargs = options.chatTemplateKwargs ?? {}
-    options.chatTemplateKwargs.enable_thinking = enableThinking
+    const enableThinking = effort != null && String(effort).toLowerCase() !== 'off'
+    const camel = options.chatTemplateKwargs
+    const snake = options.chat_template_kwargs
+    const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+    let kwargs = {}
+    if (isRecord(camel)) kwargs = camel
+    else if (isRecord(snake)) kwargs = snake
+    if (kwargs !== snake && isRecord(snake)) Object.assign(kwargs, snake)
+    kwargs.enable_thinking = enableThinking
+    options.chatTemplateKwargs = kwargs
     // Some DSH layers read the camelCase spelling; set both defensively.
-    options.chat_template_kwargs = options.chatTemplateKwargs
+    options.chat_template_kwargs = kwargs
   } catch {
     // never let a tuning failure break the request
   }
@@ -61,4 +68,3 @@ export function apply(ctx) {
     return next()
   })
 }
-

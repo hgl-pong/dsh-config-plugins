@@ -42,6 +42,20 @@ test('keeps existing chat_template_kwargs intact', () => {
   assert.equal(opts.chatTemplateKwargs.foo, 1)
 })
 
+test('supports the snake-case kwargs shape and case-insensitive off', () => {
+  const opts = { provider: 'agnes', reasoningEffort: 'OFF', chat_template_kwargs: { foo: 1 } }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.foo, 1)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, false)
+  assert.equal(opts.chat_template_kwargs, opts.chatTemplateKwargs)
+})
+
+test('replaces malformed kwargs containers instead of throwing', () => {
+  const opts = { provider: 'agnes', reasoningEffort: 'high', chatTemplateKwargs: 'invalid' }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, true)
+})
+
 test('leaves non-Agnes options untouched', () => {
   const opts = { provider: 'deepseek-v4-flash', reasoningEffort: 'max' }
   tuneAgnesOptions(opts)

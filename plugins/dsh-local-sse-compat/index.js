@@ -24,8 +24,12 @@ function isRecoverable(error) {
 
 function isRecoverableFinish(reason) {
   if (reason?.kind !== 'error') return false
-  const code = String(reason.failure?.code ?? '')
-  const message = String(reason.failure?.message ?? '')
+  // Stream implementations have used both `failure` and `error` for the
+  // nested error payload. Accept either shape so a recoverable truncation is
+  // not surfaced as a fatal request failure after an adapter upgrade.
+  const failure = reason.failure ?? reason.error ?? {}
+  const code = String(failure.code ?? '')
+  const message = String(failure.message ?? failure ?? '')
   return code === 'STREAM_CLOSED'
     || code === 'MALFORMED_RESPONSE'
     || /SSE (?:stream|payload).*?(?:DONE|ended|malformed)/i.test(message)
@@ -81,8 +85,8 @@ async function* repairStream(stream) {
 
 export function apply(ctx) {
   ctx.on('llm/stream', (options, next) => {
-    tuneCompactionOptions(options)
     if (!isDeepSeekProvider(options?.provider)) return next()
+    tuneCompactionOptions(options)
     return repairStream(next())
   })
 }
