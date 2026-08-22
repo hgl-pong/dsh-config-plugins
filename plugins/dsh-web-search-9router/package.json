@@ -1,0 +1,32 @@
+{
+  "name": "dsh-web-search-9router",
+  "version": "0.1.0",
+  "description": "DSH plugin: 用 9Router 替换内置 DeepSeek 联网搜索 provider（/v1/search，支持 Tavily / Exa / Brave / Serper / SearXNG / Google PSE / Linkup / SearchAPI / You.com / Perplexity），并启用 fetch 能力。",
+  "author": "llt",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-web": "^0.1.1-rc.2"
+  },
+  "license": "MIT"
+}

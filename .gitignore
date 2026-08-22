@@ -3,3 +3,12 @@
 *.log
 .DS_Store
 package-lock.json
+
+# Local tooling / runtime state (not part of the repo)
+.omo/
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db

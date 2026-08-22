@@ -209,6 +209,8 @@ $registryPlugins = @(
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
 
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
+Add-DshPluginIfMissing 'dsh-agnes-provider' (Join-Path $repoRoot 'plugins\dsh-agnes-provider')
+Add-DshPluginIfMissing 'dsh-web-search-9router' (Join-Path $repoRoot 'plugins\dsh-web-search-9router')
 Add-DshPluginIfMissing 'opencode-zen-compat' (Join-Path $repoRoot 'vendor\opencode-zen-compat')
 
 Write-Host "`nInstallation complete. Restart with: dsh web --no-open" -ForegroundColor Green
