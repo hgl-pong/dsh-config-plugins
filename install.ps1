@@ -215,19 +215,43 @@ function Ensure-OpenInVscodePatched([string]$dshHome) {
   # dsh-open-in-vscode is installed from a git URL and is never on npm, so
   # Add-DshPluginIfMissing skips it whenever it is present. pnpm only applies a
   # patchedDependencies entry during an (re)install, so for an already-installed
-  # plugin we must force a remove + re-add to apply the Trae-detection patch.
+  # plugin we must force a remove + re-add to apply the editor-detection patch.
   $pkgDir = Join-Path $dshHome 'profiles\web\node_modules\dsh-open-in-vscode'
   $indexFile = Join-Path $pkgDir 'lib\index.js'
   if (Test-Path -LiteralPath $indexFile) {
     $text = Get-Content -Raw -LiteralPath $indexFile
-    if ($text.Contains('Trae.exe')) {
-      Write-Host 'dsh-open-in-vscode already patched for Trae detection.' -ForegroundColor DarkGray
+    if ($text.Contains('editorLocations') -and $text.Contains('CodeBuddy.exe')) {
+      Write-Host 'dsh-open-in-vscode already patched for compatible editor detection.' -ForegroundColor DarkGray
       return
     }
   }
-  Write-Host "`n[reinstall] dsh-open-in-vscode (apply Trae detection patch)" -ForegroundColor Yellow
-  & dsh plugin --profile web remove dsh-open-in-vscode
-  if ($LASTEXITCODE -ne 0) { throw 'Failed to remove dsh-open-in-vscode for re-patch' }
+  Write-Host "`n[reinstall] dsh-open-in-vscode (apply compatible editor detection patch)" -ForegroundColor Yellow
+  # Older installs used a tarball URL, while the patch is keyed by the
+  # package's name@version. Temporarily unregister this entry so pnpm can
+  # remove the old tarball before the pinned GitHub dependency is re-added.
+  $workspaceFile = Join-Path $dshHome 'profiles\web\pnpm-workspace.yaml'
+  $workspaceText = $null
+  $patchWasRegistered = $false
+  if (Test-Path -LiteralPath $workspaceFile) {
+    $workspaceText = Get-Content -Raw -LiteralPath $workspaceFile
+    $withoutEditorPatch = [regex]::Replace(
+      $workspaceText,
+      "(?m)^[ \t]*'dsh-open-in-vscode@0\.1\.6':[^\r\n]*(?:\r?\n|$)",
+      ''
+    )
+    $patchWasRegistered = $withoutEditorPatch -ne $workspaceText
+    if ($patchWasRegistered) {
+      Set-Content -LiteralPath $workspaceFile -Value $withoutEditorPatch -Encoding utf8
+    }
+  }
+  try {
+    & dsh plugin --profile web remove dsh-open-in-vscode
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove dsh-open-in-vscode for re-patch' }
+  } finally {
+    if ($patchWasRegistered) {
+      Set-Content -LiteralPath $workspaceFile -Value $workspaceText -Encoding utf8
+    }
+  }
   # Pin the re-add to the v0.1.6 tag so the `patchedDependencies` key
   # dsh-open-in-vscode@0.1.6 matches; an unpinned git spec could resolve to a
   # newer HEAD and the patch would not apply.
@@ -235,10 +259,10 @@ function Ensure-OpenInVscodePatched([string]$dshHome) {
   if ($LASTEXITCODE -ne 0) { throw 'Failed to re-add dsh-open-in-vscode after re-patch' }
   if (Test-Path -LiteralPath $indexFile) {
     $newText = Get-Content -Raw -LiteralPath $indexFile
-    if ($newText.Contains('Trae.exe')) {
-      Write-Host 'dsh-open-in-vscode re-installed with Trae detection.' -ForegroundColor Green
+    if ($newText.Contains('editorLocations') -and $newText.Contains('CodeBuddy.exe')) {
+      Write-Host 'dsh-open-in-vscode re-installed with compatible editor detection.' -ForegroundColor Green
     } else {
-      Write-Host 'WARNING: dsh-open-in-vscode re-installed but the Trae detection patch did not apply.' -ForegroundColor Red
+      Write-Host 'WARNING: dsh-open-in-vscode re-installed but the compatible editor detection patch did not apply.' -ForegroundColor Red
     }
   }
 }
@@ -392,7 +416,7 @@ $registryPlugins = @(
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
 
 # dsh-open-in-vscode is installed from git and skipped by the loop above when
-# present, so force a reinstall if its Trae-detection patch is not yet applied.
+# present, so force a reinstall if its compatible-editor patch is not applied.
 Ensure-OpenInVscodePatched $dshHome
 
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
