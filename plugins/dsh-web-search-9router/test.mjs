@@ -5,6 +5,7 @@ import {
   DEFAULT_NINEROUTER_URL,
   DEFAULT_SEARCH_PROVIDER,
   resolveEnv,
+  resolveOptions,
   mapNineRouterResponse,
   buildSearchBody,
   NineRouterSearchProvider
@@ -24,6 +25,20 @@ test('resolveEnv reads env with defaults and strips trailing slashes', () => {
   assert.equal(def.baseURL, DEFAULT_NINEROUTER_URL)
   assert.equal(def.provider, DEFAULT_SEARCH_PROVIDER)
   assert.equal(def.apiKey, undefined)
+})
+
+test('resolveOptions prefers settings section over env and defaults', () => {
+  const env = { NINEROUTER_URL: 'https://env.example/', NINEROUTER_KEY: 'env-key', NINEROUTER_SEARCH_PROVIDER: 'exa' }
+  // 设置页/entry 值优先
+  const fromSettings = resolveOptions({ baseURL: 'https://cfg.example/', searchProvider: 'brave', apiKey: 'cfg-key' }, env)
+  assert.deepEqual(fromSettings, { baseURL: 'https://cfg.example', provider: 'brave', apiKey: 'cfg-key' })
+  // section 为空时回退到环境变量
+  const fromEnv = resolveOptions({}, env)
+  assert.deepEqual(fromEnv, { baseURL: 'https://env.example', provider: 'exa', apiKey: 'env-key' })
+  // 两者都为空时用内置默认
+  const fromDefaults = resolveOptions({}, {})
+  assert.equal(fromDefaults.baseURL, DEFAULT_NINEROUTER_URL)
+  assert.equal(fromDefaults.provider, DEFAULT_SEARCH_PROVIDER)
 })
 
 test('mapNineRouterResponse maps results and answer', () => {

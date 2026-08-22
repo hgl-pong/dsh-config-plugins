@@ -23,6 +23,27 @@ dsh plugin --profile web add F:\AITools\dsh-config-plugins\plugins\dsh-web-searc
 
 ## 配置
 
+### 方式一：DSH 设置页（推荐）
+
+插件注册了设置页（命名空间 `dsh-web-search-9router`），并自带浏览器半插件
+（`client.js`，factory 形式的 client bundle），在 DSH Web 的
+**设置 → 插件 → 插件配置** 里渲染一张“联网搜索（9Router）”卡片：
+
+| 字段 | 说明 | 默认 |
+|---|---|---|
+| `baseURL` | 调用链接（9Router 服务地址）。留空使用默认；非空时须为合法的 `http(s)://` 地址，否则保存被拦截并提示 | `https://ninerouter.com` |
+| `apiKey` | API key（secret 字段：界面不回显，留空保存 = 保持现值；徽标显示是否已配置） | 空 |
+| `searchProvider` | 默认搜索 provider/model。下拉选择已知 provider（tavily/exa/brave/serper/searxng/google-pse/linkup/searchapi/youcom/perplexity/combo），也保留自定义值 | `tavily` |
+
+卡片遵循官方 staged-form 交互：编辑先暂存，保存时逐字段写入；覆盖过的字段
+显示“已覆盖”徽标并可恢复默认。写入即生效（无需重启，`watch` 回调切换数据源），
+保存成功会短暂显示“已保存”；`baseURL` 非空时会校验是否为合法 `http(s)` 地址，
+非法值会阻止保存并给出提示；清除 API Key 时会出现二次确认提示，避免误删。
+
+配置优先级：**设置页/entry 配置 > 环境变量 > 内置默认**。
+
+### 方式二：环境变量（兜底）
+
 通过环境变量配置（在启动 `dsh` 的 shell 里设置）：
 
 | 变量 | 说明 | 默认 |

@@ -32,10 +32,14 @@
           maxTokens: 65536
           input: [text, image]
           # Agnes Thinking 是 on/off 开关（chat_template_kwargs.enable_thinking），
-          # 不是渐进的 reasoning_effort。supportsReasoningEffort:false 表示不发送渐进
-          # 档位；reasoningEfforts 只是“合法 effort 名”白名单 —— 必须包含 off，否则
-          # compaction/ACP 发送 reasoning_effort:"off" 会被 pi-ai 校验拒绝并报：
+          # 不是渐进的 reasoning_effort。thinkingFormat 必须是枚举内的合法值：
+          #   openai | deepseek | openrouter | together | zai | qwen | chat-template
+          #   | qwen-chat-template | string-thinking | ant-ling
+          # chat-template 即使用 chat_template_kwargs 的机制，正好对应 Agnes 的
+          # chat_template_kwargs.enable_thinking。supportsReasoningEffort:false 表示
+          # 不发送渐进档位；reasoningEfforts 只是“合法 effort 名”白名单 —— 必须包含
+          # off，否则 compaction/ACP 发送 reasoning_effort:"off" 会被 pi-ai 校验拒绝：
           #   Error: provider "agnes" model "agnes-2.5-flash" does not support reasoning effort "off"
           # off->null 关闭思考；high->high 开启思考（由 index.js 翻译成 enable_thinking）。
           reasoningEfforts: { off: null, high: high }
-          compat: { thinkingFormat: agnes, supportsReasoningEffort: false }
+          compat: { thinkingFormat: chat-template, supportsReasoningEffort: false }

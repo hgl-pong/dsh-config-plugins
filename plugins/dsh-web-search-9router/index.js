@@ -11,7 +11,13 @@
  * DSH 的 web 能力 seam；cordis.patch.yml 把 `web.searchProvider` 固定为 9router 并禁用
  * `web-search-deepseek`，从而完全替换内置 DeepSeek 搜索。
  *
- * 环境变量：
+ * 本插件提供一个 DSH 设置页（命名空间 dsh-web-search-9router），可配置：
+ *   - baseURL        调用链接（9Router 服务地址）
+ *   - apiKey         API key（secret 字段，设置页隐藏明文）
+ *   - searchProvider 默认搜索 provider/model
+ * 配置优先级：设置页/entry 配置 > 环境变量 > 内置默认。
+ *
+ * 环境变量（作为设置页的兜底）：
  *   NINEROUTER_URL               9Router 服务地址（默认 https://ninerouter.com）
  *   NINEROUTER_KEY               鉴权 key（9Router 开启 auth 时需要）
  *   NINEROUTER_SEARCH_PROVIDER   默认搜索 provider/model（默认 tavily）
@@ -24,17 +30,41 @@ export const inject = ['web']
 export const PROVIDER_ID = '9router'
 
 /** 9Router 默认服务地址。 */
-export const DEFAULT_NINEROUTER_URL = 'https://ninerouter.com'
+export const DEFAULT_NINEROUTER_URL = 'http://localhost:20128'
 /** 默认搜索 provider / model（与 9Router 的 `/v1/models/web` 的 id 对齐，如 `tavily`）。 */
 export const DEFAULT_SEARCH_PROVIDER = 'tavily'
 /** 请求 9Router 时附带的 UA 标识。 */
 export const USER_AGENT = 'dsh-web-search-9router/0.1.0'
+/** 设置页命名空间（小写 kebab-case）。 */
+export const NINEROUTER_SETTINGS_NAMESPACE = 'dsh-web-search-9router'
+
+/** entry 配置的默认值（cordis.patch.yml 未给 config 时的 schema 兜底）。
+ * apiKey 刻意缺席：role('secret') 字段带默认值会让 redactSecrets 的
+ * `set: value !== undefined` 恒为 true，设置页就永远显示“已配置”。 */
+export const configDefaults = Object.freeze({
+  baseURL: DEFAULT_NINEROUTER_URL,
+  searchProvider: DEFAULT_SEARCH_PROVIDER
+})
 
 /** 从环境变量读取配置（可注入 env 便于测试）。 */
 export function resolveEnv(env = process.env) {
   const baseURL = (env.NINEROUTER_URL || DEFAULT_NINEROUTER_URL).replace(/\/+$/, '')
   const provider = env.NINEROUTER_SEARCH_PROVIDER || DEFAULT_SEARCH_PROVIDER
   const apiKey = env.NINEROUTER_KEY
+  return { baseURL, provider, apiKey }
+}
+
+/**
+ * 把一个设置 section（可能来自设置页/entry 配置）解析为 provider 的 options。
+ * 优先级：section 显式值 > 环境变量 > 内置默认。所有值都会先归一化。
+ * @param section - 当前权威的设置 section（base + 用户覆盖）。
+ * @param env - 可注入的环境对象（便于测试）。
+ */
+export function resolveOptions(section, env = process.env) {
+  const ambient = resolveEnv(env)
+  const baseURL = (section?.baseURL?.trim() || ambient.baseURL).replace(/\/+$/, '')
+  const provider = section?.searchProvider?.trim() || ambient.provider
+  const apiKey = section?.apiKey?.trim() || ambient.apiKey
   return { baseURL, provider, apiKey }
 }
 
@@ -141,8 +171,32 @@ export class NineRouterSearchProvider {
   }
 }
 
-export function apply(ctx) {
-  ctx.web.registerSearchProvider(new NineRouterSearchProvider(() => resolveEnv()))
+export async function apply(ctx, config) {
+  const entry = { ...configDefaults, ...(config ?? {}) }
+  let current = () => entry
+  // 惰性挂载设置页：仅当 DSH 的 settings 服务与 schema 可用时安装；任何失败
+  // （依赖缺失、settings 服务未挂载）都降级为 entry+环境变量，但不静默——
+  // 记一条 warn，否则像“本地路径安装导致 peer 解析失败”这类问题无从发现。
+  try {
+    const { default: z } = await import('@deepseek-ai/schemastery')
+    const Config = z.object({
+      baseURL: z.string().default(DEFAULT_NINEROUTER_URL),
+      searchProvider: z.string().default(DEFAULT_SEARCH_PROVIDER),
+      // secret 字段不能带 default：redactSecrets 以 value !== undefined 判定
+      // “已配置”，带默认值会让设置页永远显示已配置（官方 web-search-deepseek 同此约定）。
+      apiKey: z.string().role('secret')
+    })
+    // 不 import dsh-settings 的 installSettingsSection（本地路径安装的符号链接
+    // 插件解析不了它）；直接等价内联：settings 服务在手，register + watch 即可。
+    ctx.inject(['settings'], (sctx) => {
+      const scope = sctx.settings.register(NINEROUTER_SETTINGS_NAMESPACE, Config, { base: entry })
+      current = () => scope.get()
+      scope.watch(() => {})
+    })
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-web-search-9router: settings section unavailable (${String(error)})`)
+  }
+  ctx.web.registerSearchProvider(new NineRouterSearchProvider(() => resolveOptions(current())))
 }
 
 // ── 内部工具 ────────────────────────────────────────────────────────────────

@@ -23,11 +23,97 @@ function Get-InstalledBundleNames([string]$dshHome) {
   return @($pkg.dependencies.PSObject.Properties.Name)
 }
 
+# --- version helpers: only skip a plugin when the already-installed version is
+#     at (or above) the target/latest version. ---
+
+$script:NpmLatestCache = @{}
+
+function Get-NpmLatestVersion([string]$packageName) {
+  # Query the npm registry for the latest published version of a package. Cached
+  # per run so we only hit the network once per distinct package name.
+  if (-not $packageName) { return $null }
+  if ($script:NpmLatestCache.ContainsKey($packageName)) { return $script:NpmLatestCache[$packageName] }
+  $result = $null
+  try {
+    $out = (& npm view $packageName version --silent 2>$null | Select-Object -First 1)
+    if ($LASTEXITCODE -eq 0 -and $out) { $result = $out.ToString().Trim() }
+  } catch { $result = $null }
+  $script:NpmLatestCache[$packageName] = $result
+  return $result
+}
+
+function Get-InstalledVersion([string]$dshHome, [string]$packageName) {
+  # The actually-installed version, read from node_modules (a plain `dependencies`
+  # spec may be a range or a git URL, so it cannot be trusted as the installed ver).
+  if (-not $packageName) { return $null }
+  $versionFile = Join-Path (Join-Path (Join-Path $dshHome 'profiles\web\node_modules') $packageName) 'package.json'
+  if (-not (Test-Path -LiteralPath $versionFile)) { return $null }
+  try {
+    $pkg = Get-Content -Raw -LiteralPath $versionFile | ConvertFrom-Json
+    return $pkg.version
+  } catch { return $null }
+}
+
+function ConvertTo-VersionParts([string]$v) {
+  # Parse the leading numeric components of a semver-ish string into ints.
+  $m = [regex]::Match($v, '^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?')
+  if (-not $m.Success) { return @(0) }
+  $parts = for ($i = 1; $i -le 4; $i++) {
+    if ($m.Groups[$i].Success) { [int]$m.Groups[$i].Value } else { 0 }
+  }
+  return ,$parts
+}
+
+function Test-IsAtLeast([string]$installed, [string]$required) {
+  # $true when $installed >= $required (numeric component-wise comparison).
+  if (-not $installed) { return $false }
+  if (-not $required) { return $true }
+  $a = ConvertTo-VersionParts $installed
+  $b = ConvertTo-VersionParts $required
+  for ($i = 0; $i -lt $a.Count; $i++) {
+    if ($a[$i] -gt $b[$i]) { return $true }
+    if ($a[$i] -lt $b[$i]) { return $false }
+  }
+  return $true
+}
+
+function Get-TargetVersion([string]$bundleName, [string]$spec) {
+  # Determine the version the plugin should be at before we skip a re-install:
+  #   * if the spec pins an explicit version (name@1.2.3), that is the floor;
+  #   * otherwise the latest published version on npm for the resolved package.
+  # Returns $null when we cannot determine a target (e.g. offline or the package
+  # is not published to npm) -> caller falls back to skip-if-installed.
+  $pinned = $null
+  if ($spec -match '^@?[^@]+@([0-9][^/]*)$') { $pinned = $Matches[1] }
+  $latest = Get-NpmLatestVersion $bundleName
+  if ($latest -and $pinned) {
+    if (Test-IsAtLeast $latest $pinned) { return $latest } else { return $pinned }
+  }
+  if ($latest) { return $latest }
+  return $pinned
+}
+
 function Add-DshPluginIfMissing([string]$bundleName, [string]$spec) {
   $installed = Get-InstalledBundleNames $dshHome
   if ($bundleName -and ($installed -contains $bundleName)) {
-    Write-Host "`n[skip] $bundleName already installed" -ForegroundColor DarkGray
-    return
+    # Only skip when the installed version is already up to date.
+    $installedVer = Get-InstalledVersion $dshHome $bundleName
+    $targetVer = Get-TargetVersion $bundleName $spec
+    if ($targetVer -and $installedVer -and (Test-IsAtLeast $installedVer $targetVer)) {
+      Write-Host "`n[skip] $bundleName already at latest ($installedVer)" -ForegroundColor DarkGray
+      return
+    }
+    if (-not $targetVer) {
+      # Cannot determine a target version (offline / not on npm). Fall back to
+      # skipping when already installed, to avoid churn on local/git plugins.
+      Write-Host "`n[skip] $bundleName already installed" -ForegroundColor DarkGray
+      return
+    }
+    if ($installedVer) {
+      Write-Host "`n[update] $bundleName ($installedVer -> target $targetVer)" -ForegroundColor Yellow
+    } else {
+      Write-Host "`n[update] $bundleName -> target $targetVer" -ForegroundColor Yellow
+    }
   }
   Write-Host "`n>>> dsh plugin --profile web add $spec" -ForegroundColor Cyan
   & dsh plugin --profile web add $spec
@@ -60,8 +146,7 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     '@deepseek-ai/dsh-tool-csv',
     '@deepseek-ai/dsh-tool-time',
     '@deepseek-ai/dsh-tool-calculator',
-    '@deepseek-ai/dsh-tool-encoding',
-    'dsh-stall-guard'
+    '@deepseek-ai/dsh-tool-encoding'
   )
 
   # --- structured merge: parse the existing workspace file into (a) top-level
@@ -129,6 +214,69 @@ function Ensure-ModelSettings([string]$dshHome) {
   }
 }
 
+function Get-DshBuiltinPresetsDir {
+  # Built-in agent presets ship inside the globally-installed dsh CLI package at
+  # <npm root>/node_modules/@deepseek-ai/dsh/config/agent-presets (standard,
+  # minimal, code, cordis). Returns the directory path, or $null when the package
+  # cannot be located (e.g. dsh is installed via a non-npm mechanism).
+  try {
+    $npmRoot = (& npm root -g 2>$null | Select-Object -First 1)
+  } catch { $npmRoot = $null }
+  if (-not $npmRoot) { return $null }
+  $pkg = Join-Path $npmRoot '@deepseek-ai\dsh'
+  if (-not (Test-Path $pkg)) { return $null }
+  return Join-Path $pkg 'config\agent-presets'
+}
+
+function Set-CompactionSummarization([string]$presetsDir) {
+  # Injects `summarizationProvider`/`summarizationModel` into the compaction-basic
+  # plugin row of every agent.cordis.yml under $presetsDir. Idempotent: skips
+  # files that already carry the config keys. Uses a regex to locate the row so it
+  # works regardless of CRLF vs LF line endings. Returns the names of modified presets.
+  if (-not (Test-Path -LiteralPath $presetsDir)) { return @() }
+  $done = @()
+  foreach ($dir in Get-ChildItem -LiteralPath $presetsDir -Directory -ErrorAction SilentlyContinue) {
+    $file = Join-Path $dir.FullName 'agent.cordis.yml'
+    if (-not (Test-Path -LiteralPath $file)) { continue }
+    $text = Get-Content -Raw -LiteralPath $file
+    # idempotent: skip if the block already carries the config keys
+    if ($text -match '(?m)^\s+config:\s*\r?\n\s+summarizationProvider:') { continue }
+    # Locate the compaction-basic plugin row by its unique `name:` line, capturing
+    # its indentation and the file's line-ending style.
+    $m = [regex]::Match($text, '(?m)^([ \t]*)name: ''@deepseek-ai/dsh-compaction-basic''(\r?\n)')
+    if (-not $m.Success) { continue }
+    $nameIndent = $m.Groups[1].Value
+    $eol = $m.Groups[2].Value
+    $configIndent = $nameIndent + '  '
+    $block = "${nameIndent}config:${eol}${configIndent}summarizationProvider: agnes${eol}${configIndent}summarizationModel: agnes-2.5-flash${eol}"
+    $newText = $text.Insert($m.Index + $m.Length, $block)
+    Set-Content -LiteralPath $file -Value $newText -Encoding utf8
+    $done += $dir.Name
+  }
+  return $done
+}
+
+function Ensure-CompactionSummarizationConfig([string]$dshHome) {
+  # `compaction-basic` reads its config from the plugin row's `config:` block in
+  # each agent preset's `agent.cordis.yml` (NOT from settings.yaml — see
+  # dsh-compaction-basic lib/index.js). So we inject the summarization model here
+  # so ACP compaction uses agnes/agnes-2.5-flash instead of the default model.
+  #
+  # Applies to BOTH the built-in presets shipped in the dsh package (standard,
+  # minimal, code, cordis) and the user's custom presets under $dshHome\.agent-presets.
+  $userDone = @(Set-CompactionSummarization (Join-Path $dshHome '.agent-presets'))
+  if ($userDone.Count -gt 0) {
+    Write-Host ("Applied compaction-basic summarization model (agnes/agnes-2.5-flash) to agent presets: " + ($userDone -join ', ')) -ForegroundColor Green
+  }
+
+  $builtinDir = Get-DshBuiltinPresetsDir
+  if (-not $builtinDir) { return }
+  $builtinDone = @(Set-CompactionSummarization $builtinDir)
+  if ($builtinDone.Count -gt 0) {
+    Write-Host ("Applied compaction-basic summarization model (agnes/agnes-2.5-flash) to built-in presets: " + ($builtinDone -join ', ')) -ForegroundColor Green
+  }
+}
+
 Require-Command 'dsh'
 Require-Command 'node'
 Require-Command 'pnpm'
@@ -141,6 +289,7 @@ Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-fil
 Ensure-WorkspacePatch $dshHome
 Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin'
 if (-not $SkipSettings) { Ensure-ModelSettings $dshHome }
+Ensure-CompactionSummarizationConfig $dshHome
 
 # Each entry: @(bundleName, spec). bundleName is the resolved package name as
 # recorded in `dsh.profile.bundles`; it is used to skip already-installed plugins.
@@ -184,13 +333,6 @@ $registryPlugins = @(
   @('@deepseek-ai/dsh-tool-calculator', 'github:omdsh-dev/dsh-tool-calculator'),
   @('@deepseek-ai/dsh-tool-encoding', 'github:omdsh-dev/dsh-tool-encoding')
 
-  # --- agent monitoring (verified no conflict with the above; dsh-cost-meter
-  #     already covers token/billing, so cost/quota panels are intentionally omitted) ---
-  @('dsh-traffic-light', 'dsh-traffic-light'),                 # per-session status light (read-only UI)
-  @('dsh-stall-guard', 'github:akira399/dsh-stall-guard'),     # watchdog: detects truly stalled turns
-  @('dsh-trace-compare', 'dsh-trace-compare'),                 # agent trajectory visualizer (session logs)
-  @('dsh-schedule', 'dsh-schedule')                            # cron + /status system/agent monitor page
-
   # === C++ dev-experience audit (verified against npm registry; DO NOT add blindly) ===
   # Reviewed candidates for improving the C++ workflow. None qualified for inclusion:
   # - dsh-terminal@0.1.1 : real PTY panel (xterm.js + node-pty), but OVERLAPS with the
@@ -210,7 +352,19 @@ foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugi
 
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
 Add-DshPluginIfMissing 'dsh-agnes-provider' (Join-Path $repoRoot 'plugins\dsh-agnes-provider')
-Add-DshPluginIfMissing 'dsh-web-search-9router' (Join-Path $repoRoot 'plugins\dsh-web-search-9router')
+
+# dsh-web-search-9router needs @deepseek-ai/schemastery resolvable from the plugin's
+# REAL path (F:\...\plugins\dsh-web-search-9router): dsh profiles install local plugins
+# as symlinks, and Node ESM resolution follows the real path, so the profile's hoisted
+# node_modules is invisible to the plugin. Install the schema peer into the plugin dir.
+$plugin9r = Join-Path $repoRoot 'plugins\dsh-web-search-9router'
+if (-not (Test-Path (Join-Path $plugin9r 'node_modules\@deepseek-ai\schemastery'))) {
+  Write-Host "`n>>> npm install (schemastery peer for dsh-web-search-9router)" -ForegroundColor Cyan
+  Push-Location $plugin9r
+  try { & npm install --no-save --no-package-lock --omit=dev '@deepseek-ai/schemastery@3.18.1'; if ($LASTEXITCODE -ne 0) { throw 'npm install failed for 9router schemastery peer' } }
+  finally { Pop-Location }
+}
+Add-DshPluginIfMissing 'dsh-web-search-9router' $plugin9r
 Add-DshPluginIfMissing 'opencode-zen-compat' (Join-Path $repoRoot 'vendor\opencode-zen-compat')
 
 Write-Host "`nInstallation complete. Restart with: dsh web --no-open" -ForegroundColor Green
