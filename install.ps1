@@ -144,6 +144,8 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   # AND registered in patchedDependencies below.
   $patchTable = [ordered]@{
     '@wingsky-1/dsh-web-file-preview@0.1.9' = 'patches/@wingsky-1__dsh-web-file-preview@0.1.9.patch'
+    'dsh-change-review@0.3.0' = 'patches/dsh-change-review@0.3.0.patch'
+    'dsh-workbench-plugin@0.1.27' = 'patches/dsh-workbench-plugin@0.1.27.patch'
   }
   New-Item -ItemType Directory -Force $profile, $patchDir | Out-Null
   if (-not (Test-Path $workspaceFile)) {
@@ -224,6 +226,81 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   }
   Set-Content -LiteralPath $workspaceFile -Value ($out -join "`r`n") -Encoding utf8
 
+}
+
+function Ensure-DshChangeReviewPatched([string]$dshHome) {
+  # dsh-change-review is a git dependency whose version can remain unchanged
+  # while this repository's patch changes. Reinstall it when the patched source
+  # is not present instead of relying on Add-DshPluginIfMissing's version check.
+  $pluginDir = Join-Path $dshHome 'profiles\web\node_modules\dsh-change-review'
+  $hostFile = Join-Path $pluginDir 'lib\index.js'
+  $clientFile = Join-Path $pluginDir 'lib\client.js'
+  $hostOk = (Test-Path -LiteralPath $hostFile) -and ((Get-Content -Raw -LiteralPath $hostFile) -match 'where\.exe')
+  $clientOk = (Test-Path -LiteralPath $clientFile) -and ((Get-Content -Raw -LiteralPath $clientFile) -match '--dsw-alias-bg-layer-2')
+  if ($hostOk -and $clientOk) {
+    Write-Host "`n[skip] dsh-change-review patch already applied" -ForegroundColor DarkGray
+    return
+  }
+
+  $workspaceFile = Join-Path $dshHome 'profiles\web\pnpm-workspace.yaml'
+  if (-not (Test-Path -LiteralPath $workspaceFile)) { throw "Missing DSH workspace file: $workspaceFile" }
+  $original = Get-Content -Raw -LiteralPath $workspaceFile
+  $withoutPatch = [regex]::Replace($original, "(?m)^[ \t]*'dsh-change-review@0\.3\.0':[^\r\n]*(?:\r?\n|$)", '')
+  try {
+    if ($withoutPatch -ne $original) {
+      Set-Content -LiteralPath $workspaceFile -Value $withoutPatch -Encoding utf8
+    }
+    Write-Host "`n>>> dsh plugin --profile web remove dsh-change-review (refresh patched package)" -ForegroundColor Cyan
+    & dsh plugin --profile web remove dsh-change-review
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove stale dsh-change-review before patch refresh' }
+  } finally {
+    # Restore the exact workspace text so all registered patches survive the
+    # remove operation, including user-owned entries not managed by this script.
+    Set-Content -LiteralPath $workspaceFile -Value $original -Encoding utf8
+  }
+
+  Write-Host "`n>>> dsh plugin --profile web add github:cirelir/dsh-change-review (apply patch)" -ForegroundColor Cyan
+  & dsh plugin --profile web add github:cirelir/dsh-change-review
+  if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-change-review with repository patch' }
+}
+
+function Ensure-DshWorkbenchPatched([string]$dshHome) {
+  # The workbench owns the file-manager editor menu shown in the UI. Refresh
+  # the fixed-version package when the Windows editor catalog patch is absent.
+  $pluginDir = Join-Path $dshHome 'profiles\web\node_modules\dsh-workbench-plugin'
+  $hostFile = Join-Path $pluginDir 'lib\index.js'
+  $clientFile = Join-Path $pluginDir 'lib\client.js'
+  $hostText = if (Test-Path -LiteralPath $hostFile) { Get-Content -Raw -LiteralPath $hostFile } else { '' }
+  $clientText = if (Test-Path -LiteralPath $clientFile) { Get-Content -Raw -LiteralPath $clientFile } else { '' }
+  $localeOk = $clientText -match 'tree\.editor\.trae' -and
+    $clientText -match 'tree\.editor\.kiro' -and
+    $clientText -match 'tree\.editor\.codebuddy' -and
+    $clientText -match 'tree\.editor\.antigravity' -and
+    $clientText -match 'tree\.editor\.qoder' -and
+    $clientText -match 'tree\.editor\.workbuddy'
+  if ($hostText -match 'windowsAppPaths' -and $hostText -match 'id: "trae"' -and $localeOk) {
+    Write-Host "`n[skip] dsh-workbench-plugin editor catalog patch already applied" -ForegroundColor DarkGray
+    return
+  }
+
+  $workspaceFile = Join-Path $dshHome 'profiles\web\pnpm-workspace.yaml'
+  if (-not (Test-Path -LiteralPath $workspaceFile)) { throw "Missing DSH workspace file: $workspaceFile" }
+  $original = Get-Content -Raw -LiteralPath $workspaceFile
+  $withoutPatch = [regex]::Replace($original, "(?m)^[ \t]*'dsh-workbench-plugin@0\.1\.27':[^\r\n]*(?:\r?\n|$)", '')
+  try {
+    if ($withoutPatch -ne $original) {
+      Set-Content -LiteralPath $workspaceFile -Value $withoutPatch -Encoding utf8
+    }
+    Write-Host "`n>>> dsh plugin --profile web remove dsh-workbench-plugin (refresh patched package)" -ForegroundColor Cyan
+    & dsh plugin --profile web remove dsh-workbench-plugin
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove stale dsh-workbench-plugin before patch refresh' }
+  } finally {
+    Set-Content -LiteralPath $workspaceFile -Value $original -Encoding utf8
+  }
+
+  Write-Host "`n>>> dsh plugin --profile web add dsh-workbench-plugin (apply patch)" -ForegroundColor Cyan
+  & dsh plugin --profile web add dsh-workbench-plugin
+  if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-workbench-plugin with repository patch' }
 }
 
 function Ensure-ModelSettings([string]$dshHome) {
@@ -312,6 +389,7 @@ $dshHome = [IO.Path]::GetFullPath($dshHome)
 Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-file-preview@0.1.9'
 Ensure-WorkspacePatch $dshHome
 Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin'
+Ensure-DshWorkbenchPatched $dshHome
 if (-not $SkipSettings) { Ensure-ModelSettings $dshHome }
 Ensure-CompactionSummarizationConfig $dshHome
 
@@ -359,7 +437,7 @@ $registryPlugins = @(
   # === C++ dev-experience audit (verified against npm registry; DO NOT add blindly) ===
   # Reviewed candidates for improving the C++ workflow. None qualified for inclusion:
   # - dsh-terminal@0.1.1 : real PTY panel (xterm.js + node-pty), but OVERLAPS with the
-  #     already-installed dsh-workbench-plugin@0.1.26, which already bundles node-pty +
+  #     already-installed dsh-workbench-plugin@0.1.27, which already bundles node-pty +
   #     @xterm/xterm + file/Git/editor UI. Adding it is redundant (double native build).
   # - dsh-cpp / dsh-git / dsh-files : exist on npm but are empty placeholders
   #     ("name reserved; first release in development") — tarball ships only
@@ -372,6 +450,7 @@ $registryPlugins = @(
   # runner, GDB frontend) must be solved via a local cordis patch, not an npm package.
 )
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
+Ensure-DshChangeReviewPatched $dshHome
 
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
 Add-DshPluginIfMissing 'dsh-agnes-provider' (Join-Path $repoRoot 'plugins\dsh-agnes-provider')

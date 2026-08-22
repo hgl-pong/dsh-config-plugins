@@ -1,0 +1,107 @@
+diff --git a/lib/client.js b/lib/client.js
+index 34a3032..5a3ff67 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -814,16 +814,17 @@ window.__ModuleLoader__.load({
+ .drv-ctx { position:fixed; z-index:20000; min-width:150px; padding:4px; border:1px solid rgba(128,128,128,0.45); border-radius:8px; background:var(--dsw-alias-surface-2, #22272e); box-shadow:0 6px 18px rgba(0,0,0,0.35); }
+ .drv-ctx-item { display:block; width:100%; border:none; background:transparent; color:inherit; text-align:left; padding:6px 10px; border-radius:6px; font-size:12px; font-family:inherit; cursor:pointer; }
+ .drv-ctx-item:hover { background:rgba(80,120,255,0.28); }
+-.drv-editor { position:relative; display:inline-flex; }
+-.drv-editor-btn { display:inline-flex; align-items:center; gap:4px; height:32px; padding:0 10px; border:1px solid rgba(128,128,128,0.35); background:transparent; color:inherit; cursor:pointer; border-radius:18px; font-size:12px; font-family:inherit; }
+-.drv-editor-btn:hover { background:rgba(128,128,128,0.14); }
+-.drv-editor-label { max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+-.drv-editor-caret { opacity:0.7; font-size:10px; flex:none; }
+-.drv-editor-menu { position:absolute; top:calc(100% + 4px); right:0; z-index:20000; min-width:170px; padding:4px; border:1px solid rgba(128,128,128,0.45); border-radius:8px; background:var(--dsw-alias-surface-2, #22272e); box-shadow:0 6px 18px rgba(0,0,0,0.35); max-height:260px; overflow:auto; }
+-.drv-editor-opt { display:block; width:100%; border:none; background:transparent; color:inherit; text-align:left; padding:6px 10px; border-radius:6px; font-size:12px; font-family:inherit; cursor:pointer; white-space:nowrap; }
+-.drv-editor-opt:hover { background:rgba(128,128,128,0.16); }
+-.drv-editor-opt.drv-editor-opt-active { background:rgba(80,120,255,0.28); }
+-.drv-editor-empty { padding:6px 10px; font-size:12px; opacity:0.6; }
++.drv-editor { position:relative; display:inline-flex; font-family:var(--dsw-font-family, inherit); }
++.drv-editor-btn { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 12px; border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35)); background:var(--dsw-alias-bg-layer-2, transparent); color:var(--dsw-alias-label-primary, inherit); cursor:pointer; border-radius:8px; font-size:13px; font-family:inherit; transition:background .15s ease, border-color .15s ease; }
++.drv-editor-btn:hover { background:var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.14)); border-color:var(--dsw-alias-border-strong, rgba(128,128,128,0.5)); }
++.drv-editor-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary, #4493f8); outline-offset:2px; }
++.drv-editor-label { max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
++.drv-editor-caret { color:var(--dsw-alias-label-tertiary, currentColor); font-size:11px; flex:none; }
++.drv-editor-menu { position:absolute; top:calc(100% + 6px); right:0; z-index:20000; min-width:210px; padding:6px; border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.45)); border-radius:10px; background:var(--dsw-alias-bg-layer-1, #22272e); color:var(--dsw-alias-label-primary, inherit); box-shadow:var(--dsw-shadow-lv3, 0 6px 18px rgba(0,0,0,0.35)); max-height:320px; overflow:auto; }
++.drv-editor-opt { display:flex; align-items:center; gap:8px; width:100%; min-height:36px; border:none; background:transparent; color:inherit; text-align:left; padding:8px 10px; border-radius:8px; font-size:13px; font-family:inherit; cursor:pointer; white-space:nowrap; }
++.drv-editor-opt:hover { background:var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.16)); }
++.drv-editor-opt.drv-editor-opt-active { background:var(--dsw-alias-interactive-bg-active, rgba(80,120,255,0.28)); }
++.drv-editor-empty { padding:8px 10px; color:var(--dsw-alias-label-secondary, inherit); font-size:12px; }
+ `;
+ 		function apply(ctx) {
+ 			ctxRef = ctx;
+@@ -866,4 +867,4 @@ window.__ModuleLoader__.load({
+ 		exports.apply = apply;
+ 		return module.exports;
+ 	}
+-});
+\ No newline at end of file
++});
+diff --git a/lib/index.js b/lib/index.js
+index 163bc3f..3b716cb 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -775,12 +775,35 @@ function apply(ctx) {
+ }
+ /** helpers: check if a command is available or an app path exists */
+ function which(cmd) {
+-  try { execSync('which ' + cmd, { stdio: 'pipe' }); return true } catch (e) { return false }
++  try {
++    const name = String(cmd).replace(/"/g, '""')
++    const probe = process.platform === 'win32' ? `where.exe "${name}"` : `which "${name}"`
++    execSync(probe, { stdio: 'pipe', windowsHide: true })
++    return true
++  } catch (e) { return false }
+ }
+ function existsAny(paths) { return paths.some((p) => existsSync(p)) }
+ 
++/** Common Windows install roots used by GUI editors that do not add a CLI to PATH. */
++function windowsInstallPaths(...parts) {
++  if (process.platform !== 'win32') return []
++  const roots = [
++    process.env.ProgramFiles,
++    process.env['ProgramFiles(x86)'],
++    process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs'),
++    'D:\\Programs',
++  ].filter(Boolean)
++  return [...new Set(roots.map((root) => join(root, ...parts)))]
++}
++
+ /** Detect installed code editors on this machine. */
+ function detectEditors() {
++  const traeExecPaths = windowsInstallPaths('Trae', 'Trae.exe')
++  const qoderExecPaths = windowsInstallPaths('Qoder', 'Qoder.exe')
++  const codeBuddyExecPaths = windowsInstallPaths('CodeBuddy', 'CodeBuddy.exe')
++  const kiroExecPaths = windowsInstallPaths('Kiro', 'Kiro.exe')
++  const antigravityExecPaths = windowsInstallPaths('Antigravity', 'Antigravity.exe')
++  const workBuddyExecPaths = windowsInstallPaths('WorkBuddy', 'WorkBuddy.exe')
+   const candidates = [
+     // VS Code / forks
+     { id: 'vscode', name: 'Visual Studio Code', command: 'code', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: ['/Applications/Visual Studio Code.app'], execPaths: ['/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'], detected: which('code') || existsAny(['/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code']) },
+@@ -789,6 +812,13 @@ function detectEditors() {
+     { id: 'cursor', name: 'Cursor', command: 'cursor', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: ['/Applications/Cursor.app'], execPaths: ['/Applications/Cursor.app/Contents/MacOS/Cursor'], detected: which('cursor') || existsAny(['/Applications/Cursor.app/Contents/MacOS/Cursor']) },
+     { id: 'windsurf', name: 'Windsurf', command: 'windsurf', openTemplate: '{cmd} {file}', appPaths: ['/Applications/Windsurf.app'], execPaths: ['/Applications/Windsurf.app/Contents/MacOS/windsurf'], detected: which('windsurf') || existsAny(['/Applications/Windsurf.app/Contents/MacOS/windsurf']) },
+     { id: 'zed', name: 'Zed', command: 'zed', openTemplate: '{cmd} {file}:{line}:{col}', appPaths: ['/Applications/Zed.app'], execPaths: ['/Applications/Zed.app/Contents/MacOS/zed'], detected: which('zed') || existsAny(['/Applications/Zed.app/Contents/MacOS/zed']) },
++    // Windows-first AI editors and VS Code forks
++    { id: 'trae', name: 'Trae', command: 'trae', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: [], execPaths: traeExecPaths, detected: which('trae') || existsAny(traeExecPaths) },
++    { id: 'qoder', name: 'Qoder', command: 'qoder', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: [], execPaths: qoderExecPaths, detected: which('qoder') || existsAny(qoderExecPaths) },
++    { id: 'codebuddy', name: 'CodeBuddy', command: 'codebuddy', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: [], execPaths: codeBuddyExecPaths, detected: which('codebuddy') || which('buddy') || existsAny(codeBuddyExecPaths) },
++    { id: 'kiro', name: 'Kiro', command: 'kiro', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: [], execPaths: kiroExecPaths, detected: which('kiro') || existsAny(kiroExecPaths) },
++    { id: 'antigravity', name: 'Antigravity', command: 'antigravity', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: [], execPaths: antigravityExecPaths, detected: which('antigravity') || existsAny(antigravityExecPaths) },
++    { id: 'workbuddy', name: 'WorkBuddy', command: 'workbuddy', openTemplate: '{cmd} --goto {file}:{line}:{col}', appPaths: [], execPaths: workBuddyExecPaths, detected: which('workbuddy') || existsAny(workBuddyExecPaths) },
+     // JetBrains
+     { id: 'idea', name: 'IntelliJ IDEA Ultimate', command: 'idea', openTemplate: '{cmd} --line {line} {file}', appPaths: ['/Applications/IntelliJ IDEA.app'], execPaths: ['/Applications/IntelliJ IDEA.app/Contents/MacOS/idea'], detected: which('idea') || existsAny(['/Applications/IntelliJ IDEA.app/Contents/MacOS/idea']) },
+     { id: 'idea-community', name: 'IntelliJ IDEA Community', command: 'idea', openTemplate: '{cmd} --line {line} {file}', appPaths: ['/Applications/IntelliJ IDEA CE.app'], execPaths: ['/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea'], detected: existsAny(['/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea']) },
+@@ -852,7 +882,9 @@ function getEditorIconPath(editorId) {
+ }
+ 
+ function escapeShellArg(s) {
+-  return "'" + String(s).replace(/'/g, "'\\''") + "'"
++  const value = String(s).replace(/[\r\n]/g, '')
++  if (process.platform === 'win32') return '"' + value.replace(/["^]/g, '^$&') + '"'
++  return "'" + value.replace(/'/g, "'\\''") + "'"
+ }
+ 
+-export { apply, cap, diffHunks, diffLines, inject, loadSessions, merge3, name, serializeSessions, splitLines, stateFilePath }
+\ No newline at end of file
++export { apply, cap, diffHunks, diffLines, inject, loadSessions, merge3, name, serializeSessions, splitLines, stateFilePath }
