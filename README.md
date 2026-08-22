@@ -23,8 +23,9 @@ dsh web --no-open
 - `plugins/dsh-local-sse-compat`：DeepSeek SSE 截断/空 payload 兼容和 compaction 专用请求调优。
 - `plugins/dsh-agnes-provider`：Agnes AI provider（`agnes-2.5-flash`，OpenAI 兼容）注册与 Thinking 开关适配。
 - `plugins/dsh-web-search-9router`：用 9Router 替换内置 DeepSeek 联网搜索（`/v1/search`，支持 Tavily/Exa/Brave/Serper 等），不消耗模型额度。
+- `plugins/dsh-compact-model`：控制 ACP 压缩（compact）使用的模型与 provider，只允许选择支持关闭推理（reasoning off）的模型（`/compact-model`）。
 - `vendor/opencode-zen-compat`：原有 opencode Zen 兼容包的可迁移副本。
-- `patches/`：文件预览插件的路径拦截修复补丁。
+- `patches/`：本地 pnpm 补丁——文件预览插件的路径拦截修复，以及 `dsh-open-in-vscode` 的编辑器识别增强（即使未安装 VS Code，也能扫描 Trae、Cursor、Windsurf、Kiro、CodeBuddy、Antigravity、VSCodium、Zed 等兼容编辑器）。
 - `install.ps1`：完整插件安装清单、补丁应用和 DeepSeek `maxTokens: 65536` 配置修复。
 
 ### 清单内附带的开发体验插件

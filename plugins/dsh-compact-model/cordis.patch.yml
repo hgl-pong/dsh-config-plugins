@@ -1,0 +1,6 @@
+# dsh-compact-model bundle patch.
+# 1) register itself as one Loader row.
+
+- insert:
+    - id: dsh-compact-model
+      name: dsh-compact-model

@@ -124,14 +124,21 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   $profile = Join-Path $dshHome 'profiles\web'
   $workspaceFile = Join-Path $profile 'pnpm-workspace.yaml'
   $patchDir = Join-Path $profile 'patches'
-  $patchName = '@wingsky-1__dsh-web-file-preview@0.1.9.patch'
-  $patchKey = '@wingsky-1/dsh-web-file-preview@0.1.9'
+  # name@version -> repo-relative patch file. Each entry must have a matching
+  # file under $repoRoot\patches and is copied into the profile's patches/ dir
+  # AND registered in patchedDependencies below.
+  $patchTable = [ordered]@{
+    '@wingsky-1/dsh-web-file-preview@0.1.9' = 'patches/@wingsky-1__dsh-web-file-preview@0.1.9.patch'
+    'dsh-open-in-vscode@0.1.6'              = 'patches/dsh-open-in-vscode@0.1.6.patch'
+  }
   New-Item -ItemType Directory -Force $profile, $patchDir | Out-Null
   if (-not (Test-Path $workspaceFile)) {
     @('packages:', '  - .', 'nodeLinker: hoisted', 'autoInstallPeers: false', '', 'dangerouslyAllowAllBuilds: true') |
       Set-Content -LiteralPath $workspaceFile -Encoding utf8
   }
-  Copy-Item -LiteralPath (Join-Path $repoRoot "patches\$patchName") -Destination (Join-Path $patchDir $patchName) -Force
+  foreach ($rel in $patchTable.Values) {
+    Copy-Item -LiteralPath (Join-Path $repoRoot $rel) -Destination (Join-Path $patchDir ([IO.Path]::GetFileName($rel))) -Force
+  }
 
   # pnpm 10 blocks `prepare` scripts of git-hosted plugins unless their package
   # names are allowlisted. Write every git dependency's resolved package name
@@ -179,8 +186,10 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     }
   }
 
-  # seed/ensure the patched entry
-  $patched[$patchKey] = "patches/$patchName"
+  # seed/ensure every patched entry
+  foreach ($pkv in $patchTable.GetEnumerator()) {
+    $patched[$pkv.Key] = $pkv.Value
+  }
   # ensure every allow-listed build package is present (preserve order)
   foreach ($pkg in $allowBuild) {
     if ($built -notcontains $pkg) { $built.Add($pkg) > $null }
@@ -200,6 +209,38 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     $out.Add("  - `"$pkg`"") > $null
   }
   Set-Content -LiteralPath $workspaceFile -Value ($out -join "`r`n") -Encoding utf8
+}
+
+function Ensure-OpenInVscodePatched([string]$dshHome) {
+  # dsh-open-in-vscode is installed from a git URL and is never on npm, so
+  # Add-DshPluginIfMissing skips it whenever it is present. pnpm only applies a
+  # patchedDependencies entry during an (re)install, so for an already-installed
+  # plugin we must force a remove + re-add to apply the Trae-detection patch.
+  $pkgDir = Join-Path $dshHome 'profiles\web\node_modules\dsh-open-in-vscode'
+  $indexFile = Join-Path $pkgDir 'lib\index.js'
+  if (Test-Path -LiteralPath $indexFile) {
+    $text = Get-Content -Raw -LiteralPath $indexFile
+    if ($text.Contains('Trae.exe')) {
+      Write-Host 'dsh-open-in-vscode already patched for Trae detection.' -ForegroundColor DarkGray
+      return
+    }
+  }
+  Write-Host "`n[reinstall] dsh-open-in-vscode (apply Trae detection patch)" -ForegroundColor Yellow
+  & dsh plugin --profile web remove dsh-open-in-vscode
+  if ($LASTEXITCODE -ne 0) { throw 'Failed to remove dsh-open-in-vscode for re-patch' }
+  # Pin the re-add to the v0.1.6 tag so the `patchedDependencies` key
+  # dsh-open-in-vscode@0.1.6 matches; an unpinned git spec could resolve to a
+  # newer HEAD and the patch would not apply.
+  & dsh plugin --profile web add github:omdsh-dev/dsh-open-in-vscode#v0.1.6
+  if ($LASTEXITCODE -ne 0) { throw 'Failed to re-add dsh-open-in-vscode after re-patch' }
+  if (Test-Path -LiteralPath $indexFile) {
+    $newText = Get-Content -Raw -LiteralPath $indexFile
+    if ($newText.Contains('Trae.exe')) {
+      Write-Host 'dsh-open-in-vscode re-installed with Trae detection.' -ForegroundColor Green
+    } else {
+      Write-Host 'WARNING: dsh-open-in-vscode re-installed but the Trae detection patch did not apply.' -ForegroundColor Red
+    }
+  }
 }
 
 function Ensure-ModelSettings([string]$dshHome) {
@@ -350,8 +391,13 @@ $registryPlugins = @(
 )
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
 
+# dsh-open-in-vscode is installed from git and skipped by the loop above when
+# present, so force a reinstall if its Trae-detection patch is not yet applied.
+Ensure-OpenInVscodePatched $dshHome
+
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
 Add-DshPluginIfMissing 'dsh-agnes-provider' (Join-Path $repoRoot 'plugins\dsh-agnes-provider')
+Add-DshPluginIfMissing 'dsh-compact-model' (Join-Path $repoRoot 'plugins\dsh-compact-model')
 
 # dsh-web-search-9router needs @deepseek-ai/schemastery resolvable from the plugin's
 # REAL path (F:\...\plugins\dsh-web-search-9router): dsh profiles install local plugins
@@ -365,6 +411,31 @@ if (-not (Test-Path (Join-Path $plugin9r 'node_modules\@deepseek-ai\schemastery'
   finally { Pop-Location }
 }
 Add-DshPluginIfMissing 'dsh-web-search-9router' $plugin9r
+
+# dsh-compact-model needs @deepseek-ai/schemastery (and its transitive deps
+# @deepseek-ai/cosmokit, @standard-schema/spec) resolvable from the plugin's REAL
+# path — same symlink reason as 9router above. Without it the settings section
+# (schema built via schemastery) fails to register and the plugin would not show
+# up in the settings panel. Copy the full closure from the 9router node_modules
+# (populated just above): a direct `npm install @deepseek-ai/schemastery` here
+# won't work because schemastery is a peer of this package and
+# @deepseek-ai/dsh-settings@^0.1.0 (also a peer) has no published registry
+# version, so npm drops the package instead of fetching its dependency tree.
+$pluginCm = Join-Path $repoRoot 'plugins\dsh-compact-model'
+if (-not (Test-Path (Join-Path $pluginCm 'node_modules\@deepseek-ai\schemastery'))) {
+  $cmNode = Join-Path $pluginCm 'node_modules'
+  Write-Host "`n>>> copying schemastery (with deps) into dsh-compact-model" -ForegroundColor Cyan
+  foreach ($rel in @('@deepseek-ai\schemastery', '@deepseek-ai\cosmokit', '@standard-schema\spec')) {
+    $src = Join-Path $plugin9r ('node_modules\' + $rel)
+    $dst = Join-Path $cmNode $rel
+    if (Test-Path $src) {
+      New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+      Copy-Item -Recurse -Force $src $dst
+    } else {
+      throw "schemastery dependency $rel not found in dsh-web-search-9router node_modules"
+    }
+  }
+}
 Add-DshPluginIfMissing 'opencode-zen-compat' (Join-Path $repoRoot 'vendor\opencode-zen-compat')
 
 Write-Host "`nInstallation complete. Restart with: dsh web --no-open" -ForegroundColor Green
