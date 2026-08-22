@@ -278,7 +278,12 @@ function Ensure-DshWorkbenchPatched([string]$dshHome) {
     $clientText -match 'tree\.editor\.antigravity' -and
     $clientText -match 'tree\.editor\.qoder' -and
     $clientText -match 'tree\.editor\.workbuddy'
-  if ($hostText -match 'windowsAppPaths' -and $hostText -match 'id: "trae"' -and $localeOk) {
+  $cppLanguageOk = $clientText -match 'cmakelists\.txt' -and
+    $clientText -match 'case`cpp`:return XE\(\{typescript:!0\}\)'
+  $syntaxHighlightOk = $clientText -match 'dshCmakeSyntax' -and
+    $clientText -match 'dshDiffTokens' -and
+    $clientText -match 'function Sj\(e\)\{let t=e\.replace'
+  if ($hostText -match 'windowsAppPaths' -and $hostText -match 'id: "trae"' -and $localeOk -and $cppLanguageOk -and $syntaxHighlightOk) {
     Write-Host "`n[skip] dsh-workbench-plugin editor catalog patch already applied" -ForegroundColor DarkGray
     return
   }
