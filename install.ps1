@@ -120,6 +120,21 @@ function Add-DshPluginIfMissing([string]$bundleName, [string]$spec) {
   if ($LASTEXITCODE -ne 0) { throw "Plugin installation failed: $spec" }
 }
 
+function Ensure-OpenEditorDependencies {
+  # Local plugins are linked by their real path, so Node cannot walk up into the
+  # profile's hoisted peers. Copy the bundled Typert protocol closure beside the
+  # plugin so the host half works after a fresh install as well as in this repo.
+  $pluginDir = Join-Path $repoRoot 'plugins\dsh-open-in-editor'
+  $target = Join-Path $pluginDir 'node_modules\@deepseek-ai\dsh-typert-protocol'
+  if (Test-Path -LiteralPath $target) { return }
+  try { $npmRoot = (& npm root -g 2>$null | Select-Object -First 1).ToString().Trim() } catch { $npmRoot = $null }
+  if (-not $npmRoot) { throw 'Cannot locate the global npm root for dsh-open-in-editor dependencies' }
+  $source = Join-Path $npmRoot '@deepseek-ai\dsh-typert-protocol'
+  if (-not (Test-Path -LiteralPath $source)) { throw "Missing Typert protocol package: $source" }
+  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+  Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+}
+
 function Ensure-WorkspacePatch([string]$dshHome) {
   $profile = Join-Path $dshHome 'profiles\web'
   $workspaceFile = Join-Path $profile 'pnpm-workspace.yaml'
@@ -129,7 +144,6 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   # AND registered in patchedDependencies below.
   $patchTable = [ordered]@{
     '@wingsky-1/dsh-web-file-preview@0.1.9' = 'patches/@wingsky-1__dsh-web-file-preview@0.1.9.patch'
-    'dsh-open-in-vscode@0.1.6'              = 'patches/dsh-open-in-vscode@0.1.6.patch'
   }
   New-Item -ItemType Directory -Force $profile, $patchDir | Out-Null
   if (-not (Test-Path $workspaceFile)) {
@@ -209,62 +223,7 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     $out.Add("  - `"$pkg`"") > $null
   }
   Set-Content -LiteralPath $workspaceFile -Value ($out -join "`r`n") -Encoding utf8
-}
 
-function Ensure-OpenInVscodePatched([string]$dshHome) {
-  # dsh-open-in-vscode is installed from a git URL and is never on npm, so
-  # Add-DshPluginIfMissing skips it whenever it is present. pnpm only applies a
-  # patchedDependencies entry during an (re)install, so for an already-installed
-  # plugin we must force a remove + re-add to apply the editor-detection patch.
-  $pkgDir = Join-Path $dshHome 'profiles\web\node_modules\dsh-open-in-vscode'
-  $indexFile = Join-Path $pkgDir 'lib\index.js'
-  if (Test-Path -LiteralPath $indexFile) {
-    $text = Get-Content -Raw -LiteralPath $indexFile
-    if ($text.Contains('editorLocations') -and $text.Contains('CodeBuddy.exe')) {
-      Write-Host 'dsh-open-in-vscode already patched for compatible editor detection.' -ForegroundColor DarkGray
-      return
-    }
-  }
-  Write-Host "`n[reinstall] dsh-open-in-vscode (apply compatible editor detection patch)" -ForegroundColor Yellow
-  # Older installs used a tarball URL, while the patch is keyed by the
-  # package's name@version. Temporarily unregister this entry so pnpm can
-  # remove the old tarball before the pinned GitHub dependency is re-added.
-  $workspaceFile = Join-Path $dshHome 'profiles\web\pnpm-workspace.yaml'
-  $workspaceText = $null
-  $patchWasRegistered = $false
-  if (Test-Path -LiteralPath $workspaceFile) {
-    $workspaceText = Get-Content -Raw -LiteralPath $workspaceFile
-    $withoutEditorPatch = [regex]::Replace(
-      $workspaceText,
-      "(?m)^[ \t]*'dsh-open-in-vscode@0\.1\.6':[^\r\n]*(?:\r?\n|$)",
-      ''
-    )
-    $patchWasRegistered = $withoutEditorPatch -ne $workspaceText
-    if ($patchWasRegistered) {
-      Set-Content -LiteralPath $workspaceFile -Value $withoutEditorPatch -Encoding utf8
-    }
-  }
-  try {
-    & dsh plugin --profile web remove dsh-open-in-vscode
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove dsh-open-in-vscode for re-patch' }
-  } finally {
-    if ($patchWasRegistered) {
-      Set-Content -LiteralPath $workspaceFile -Value $workspaceText -Encoding utf8
-    }
-  }
-  # Pin the re-add to the v0.1.6 tag so the `patchedDependencies` key
-  # dsh-open-in-vscode@0.1.6 matches; an unpinned git spec could resolve to a
-  # newer HEAD and the patch would not apply.
-  & dsh plugin --profile web add github:omdsh-dev/dsh-open-in-vscode#v0.1.6
-  if ($LASTEXITCODE -ne 0) { throw 'Failed to re-add dsh-open-in-vscode after re-patch' }
-  if (Test-Path -LiteralPath $indexFile) {
-    $newText = Get-Content -Raw -LiteralPath $indexFile
-    if ($newText.Contains('editorLocations') -and $newText.Contains('CodeBuddy.exe')) {
-      Write-Host 'dsh-open-in-vscode re-installed with compatible editor detection.' -ForegroundColor Green
-    } else {
-      Write-Host 'WARNING: dsh-open-in-vscode re-installed but the compatible editor detection patch did not apply.' -ForegroundColor Red
-    }
-  }
 }
 
 function Ensure-ModelSettings([string]$dshHome) {
@@ -383,7 +342,6 @@ $registryPlugins = @(
   @('@deepseek-ai/dsh-compaction-basic', '@deepseek-ai/dsh-compaction-basic'),
 
   # --- developer-experience additions (verified, no conflict with the above) ---
-  @('dsh-open-in-vscode', 'github:omdsh-dev/dsh-open-in-vscode'),
   @('@deepseek-ai/dsh-lsp', 'github:omdsh-dev/dsh-lsp'),
   @('@dsh-external/dsh-sidechain', 'github:Buyi-wsgzg/dsh-sidechain'),
   @('@omdsh-dev/dsh-annotation', 'github:omdsh-dev/dsh-annotation'),
@@ -409,19 +367,17 @@ $registryPlugins = @(
   # - dsh-theme / dsh-notify / dsh-voice : real & installable, but unrelated to C++ dev
   #     (themes / Windows toast / TTS-STT). Left out on purpose.
   # Net result: the active C++-relevant stack is already covered by dsh-lsp +
-  # dsh-open-in-vscode + dsh-workbench-plugin + dsh-vision-router. Gaps that have NO
+  # dsh-open-in-editor + dsh-workbench-plugin + dsh-vision-router. Gaps that have NO
   # mature dsh plugin yet (cmake build+error feedback, clang-format/tidy, GTest/Catch2
   # runner, GDB frontend) must be solved via a local cordis patch, not an npm package.
 )
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
 
-# dsh-open-in-vscode is installed from git and skipped by the loop above when
-# present, so force a reinstall if its compatible-editor patch is not applied.
-Ensure-OpenInVscodePatched $dshHome
-
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
 Add-DshPluginIfMissing 'dsh-agnes-provider' (Join-Path $repoRoot 'plugins\dsh-agnes-provider')
 Add-DshPluginIfMissing 'dsh-compact-model' (Join-Path $repoRoot 'plugins\dsh-compact-model')
+Ensure-OpenEditorDependencies
+Add-DshPluginIfMissing 'dsh-open-in-editor' (Join-Path $repoRoot 'plugins\dsh-open-in-editor')
 
 # dsh-web-search-9router needs @deepseek-ai/schemastery resolvable from the plugin's
 # REAL path (F:\...\plugins\dsh-web-search-9router): dsh profiles install local plugins

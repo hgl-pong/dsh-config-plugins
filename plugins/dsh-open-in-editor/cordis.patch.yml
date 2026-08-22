@@ -1,0 +1,4 @@
+# Register the local multi-editor opener as a Loader row.
+- insert:
+    - id: dsh-open-in-editor
+      name: dsh-open-in-editor
