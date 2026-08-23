@@ -146,6 +146,7 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     '@wingsky-1/dsh-web-file-preview@0.1.9' = 'patches/@wingsky-1__dsh-web-file-preview@0.1.9.patch'
     'dsh-change-review@0.3.0' = 'patches/dsh-change-review@0.3.0.patch'
     'dsh-workbench-plugin@0.1.27' = 'patches/dsh-workbench-plugin@0.1.27.patch'
+    '@deepseek-ai/dsh-compaction-basic@0.0.1-rc.3' = 'patches/@deepseek-ai__dsh-compaction-basic@0.0.1-rc.3.patch'
   }
   New-Item -ItemType Directory -Force $profile, $patchDir | Out-Null
   if (-not (Test-Path $workspaceFile)) {
@@ -264,6 +265,41 @@ function Ensure-DshChangeReviewPatched([string]$dshHome) {
   Write-Host "`n>>> dsh plugin --profile web add github:cirelir/dsh-change-review (apply patch)" -ForegroundColor Cyan
   & dsh plugin --profile web add github:cirelir/dsh-change-review
   if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-change-review with repository patch' }
+}
+
+function Ensure-CompactionBasicPatched([string]$dshHome) {
+  # compaction-basic is a registry package whose version can remain unchanged
+  # while this repository's range-safety patch changes. Refresh it only when the
+  # installed source does not carry the marker, preserving idempotent installs.
+  $pluginDir = Join-Path $dshHome 'profiles\web\node_modules\@deepseek-ai\dsh-compaction-basic'
+  $hostFile = Join-Path $pluginDir 'lib\index.js'
+  $hostText = if (Test-Path -LiteralPath $hostFile) { Get-Content -Raw -LiteralPath $hostFile } else { '' }
+  $patched = $hostText -match 'SUMMARY_INPUT_RATIO' -and
+    $hostText -match 'info\?\.context\?\.contextWindow'
+  if ($patched) {
+    Write-Host "`n[skip] @deepseek-ai/dsh-compaction-basic range-safety patch already applied" -ForegroundColor DarkGray
+    return
+  }
+  if (-not (Test-Path -LiteralPath $hostFile)) { return }
+
+  $workspaceFile = Join-Path $dshHome 'profiles\web\pnpm-workspace.yaml'
+  if (-not (Test-Path -LiteralPath $workspaceFile)) { throw "Missing DSH workspace file: $workspaceFile" }
+  $original = Get-Content -Raw -LiteralPath $workspaceFile
+  $withoutPatch = [regex]::Replace($original, "(?m)^[ \t]*'@deepseek-ai/dsh-compaction-basic@0\.0\.1-rc\.3':[^\r\n]*(?:\r?\n|$)", '')
+  try {
+    if ($withoutPatch -ne $original) {
+      Set-Content -LiteralPath $workspaceFile -Value $withoutPatch -Encoding utf8
+    }
+    Write-Host "`n>>> dsh plugin --profile web remove @deepseek-ai/dsh-compaction-basic (refresh range-safety patch)" -ForegroundColor Cyan
+    & dsh plugin --profile web remove '@deepseek-ai/dsh-compaction-basic'
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove stale dsh-compaction-basic before patch refresh' }
+  } finally {
+    Set-Content -LiteralPath $workspaceFile -Value $original -Encoding utf8
+  }
+
+  Write-Host "`n>>> dsh plugin --profile web add @deepseek-ai/dsh-compaction-basic (apply range-safety patch)" -ForegroundColor Cyan
+  & dsh plugin --profile web add '@deepseek-ai/dsh-compaction-basic'
+  if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-compaction-basic with range-safety patch' }
 }
 
 function Ensure-DshWorkbenchPatched([string]$dshHome) {
@@ -392,11 +428,16 @@ Require-Command 'pnpm'
 $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }
 $dshHome = [IO.Path]::GetFullPath($dshHome)
 
-# Install the patched package FIRST so its patch is not "unused" during later installs.
-Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-file-preview@0.1.9'
+# Register all workspace patches before any package operation. This matters for
+# fresh profiles: pnpm evaluates every registered patch during an add/update,
+# so the first install must already see the dsh-change-review/compaction patches.
 Ensure-WorkspacePatch $dshHome
+# Install the patched package before the remaining plugins so its patch is not
+# treated as unused during later installs.
+Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-file-preview@0.1.9'
 Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin'
 Ensure-DshWorkbenchPatched $dshHome
+Ensure-CompactionBasicPatched $dshHome
 if (-not $SkipSettings) { Ensure-ModelSettings $dshHome }
 Ensure-CompactionSummarizationConfig $dshHome
 

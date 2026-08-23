@@ -1,0 +1,72 @@
+diff --git a/lib/index.js b/lib/index.js
+index d85f2da..a262087 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -711,6 +711,29 @@ function conversationTarget(agent) {
+ 		model: agent.options.model
+ 	};
+ }
++/** Keep auxiliary summarization input below the selected model's context limit. */
++const SUMMARY_INPUT_RATIO = .75;
++/** Resolve the actual target used by the summarizer for one routed conversation. */
++function summarizationTarget(policy, target) {
++	return {
++		provider: policy.summarizationProvider.length === 0 ? target.provider : policy.summarizationProvider,
++		model: policy.summarizationModel.length === 0 ? target.model : policy.summarizationModel
++	};
++}
++/** Convert summarizer capacity into a recent-tail budget for range selection. */
++async function summarizationRetainTokens(ctx, measurement, target, policy, signal) {
++	const auxiliaryTarget = summarizationTarget(policy, target);
++	let info;
++	try {
++		info = await ctx.llm.resolveModelInfo(auxiliaryTarget.provider, auxiliaryTarget.model, signal);
++	} catch {
++		return 0;
++	}
++	const contextWindow = info?.context?.contextWindow ?? info?.contextWindow;
++	if (!Number.isInteger(contextWindow) || contextWindow <= 0) return 0;
++	const inputBudget = Math.floor(contextWindow * SUMMARY_INPUT_RATIO);
++	return Math.max(0, measurement.totalTokens - inputBudget);
++}
+ const thresholdRatioSchema = z.number();
+ const retainRatioSchema = z.number();
+ const retainTokensSchema = z.number().step(1).min(0);
+@@ -870,7 +893,8 @@ var BasicCompactionEngine = class extends CompactionEngine {
+ 				prune.pruneSession(agent.session);
+ 				measurement = meter.measure(agent.session);
+ 			}
+-			const range = selectCompactableRange(agent.session, measurement, 0);
++			const retainTokens = await summarizationRetainTokens(this.ctx, measurement, target, policy, signal);
++			const range = selectCompactableRange(agent.session, measurement, retainTokens);
+ 			if (range === null) return null;
+ 			return this.compactRegion(range.start, range.end, agent, signal);
+ 		}
+@@ -885,9 +909,11 @@ var BasicCompactionEngine = class extends CompactionEngine {
+ 			measurement = meter.measure(agent.session);
+ 		}
+ 		if (measurement.totalTokens < spec.thresholdTokens) return null;
++		const summarizationRetain = await summarizationRetainTokens(this.ctx, measurement, target, policy, signal);
++		const retainTokens = Math.max(spec.retainTokens, summarizationRetain);
+ 		let result = null;
+ 		for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
+-			const range = selectCompactableRange(agent.session, measurement, spec.retainTokens);
++			const range = selectCompactableRange(agent.session, measurement, retainTokens);
+ 			if (range === null) {
+ 				/* v8 ignore else -- concrete replacement preserves a compactable checkpoint; subclass hooks cannot mutate it. */
+ 				if (result === null) return null;
+@@ -930,7 +956,13 @@ var BasicCompactionEngine = class extends CompactionEngine {
+ 				const operationSignal = AbortSignal.any([agentSignal, signal]);
+ 				try {
+ 					operationSignal.throwIfAborted();
+-					const range = selectCompactableRange(agent.session, this.ctx.tokenMeter.measure(agent.session), 0);
++					const measurement = this.ctx.tokenMeter.measure(agent.session);
++					const target = conversationTarget(agent);
++					const policy = target === void 0 ? this.config : resolveTargetPolicy(this.config, target);
++					const retainTokens = target === void 0
++						? 0
++						: await summarizationRetainTokens(this.ctx, measurement, target, policy, operationSignal);
++					const range = selectCompactableRange(agent.session, measurement, retainTokens);
+ 					if (range === null) return null;
+ 					return await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
+ 						owner: null,

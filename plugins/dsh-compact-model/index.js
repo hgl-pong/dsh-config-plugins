@@ -37,6 +37,10 @@ export const NAMESPACE = 'dsh-compact-model'
 /** 读取 provider/model 的来源命名空间（llm-pi-ai 已注册）。 */
 export const PROVIDERS_NAMESPACE = 'llm-pi-ai'
 
+// Keep the target supplied by the agent preset so an empty settings selection
+// can restore it after a temporary user-selected compaction model.
+const engineSummarizationBaselines = new WeakMap()
+
 /**
  * 默认配置。provider/model 为空 = 不覆盖压缩所用模型（走模型自身默认）；
  * 其余为 @deepseek-ai/dsh-compaction-basic 引擎的默认调参值（与其内部默认一致）。
@@ -211,13 +215,25 @@ export function applyEngineConfig(ctx, value) {
     if (compaction == null || typeof compaction !== 'object' || compaction.config == null) {
       return false
     }
+    let baseline = engineSummarizationBaselines.get(compaction)
+    if (baseline === undefined) {
+      baseline = {
+        provider: typeof compaction.config.summarizationProvider === 'string'
+          ? compaction.config.summarizationProvider
+          : '',
+        model: typeof compaction.config.summarizationModel === 'string'
+          ? compaction.config.summarizationModel
+          : ''
+      }
+      engineSummarizationBaselines.set(compaction, baseline)
+    }
     const overrides = buildEngineConfigOverrides(value)
-    // The compaction service resolves these fields as strings and calls
-    // `.length`; an empty pair is its documented "inherit the request target"
-    // sentinel. Set it here so clearing a selection does not retain stale keys.
+    // An empty selection means "inherit the request target". Restore the
+    // preset target instead of materializing an empty pair, which would erase
+    // the configured summarization provider/model.
     if (!Object.hasOwn(overrides, 'summarizationProvider')) {
-      overrides.summarizationProvider = ''
-      overrides.summarizationModel = ''
+      overrides.summarizationProvider = baseline.provider
+      overrides.summarizationModel = baseline.model
     }
     compaction.config = { ...compaction.config, ...overrides }
     return true

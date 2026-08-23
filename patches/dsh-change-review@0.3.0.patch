@@ -2,7 +2,10 @@ diff --git a/lib/client.js b/lib/client.js
 index 34a3032..10c3e79 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -321 +321,59 @@ window.__ModuleLoader__.load({
+@@ -318,22 +318,80 @@ window.__ModuleLoader__.load({
+ 		}
+ 
+ 		// ── diff line rendering ────────────────────────────────────────────
 -		function Line({ h }) {
 +		const dshReviewKeywords = new Set('if else elseif endif foreach endforeach while endwhile function endfunction macro endmacro return include project set option unset message add_subdirectory add_executable add_library target_link_libraries target_include_directories target_compile_definitions target_compile_options target_compile_features find_package configure_file file string list install enable_testing add_test class struct enum namespace template const constexpr static public private protected virtual using import from return async await function new true false null undefined void auto int float double bool let var this throw try catch finally switch case break continue package fn impl trait pub mod use match mut def yield lambda'.split(' '));
 +		const dshReviewStyles = {
@@ -63,7 +66,10 @@ index 34a3032..10c3e79 100644
 +			return nodes.length ? nodes : (source || ' ');
 +		}
 +		function Line({ h, path }) {
-@@ -326,8 +384,8 @@ window.__ModuleLoader__.load({
+ 			const colors = useStore((s) => s.colors);
+ 			let bg;
+ 			let fg;
+ 			let cls;
 -			if (h.type === "add") { bg = colors.addBg; fg = colors.addFg; cls = "drv-add"; }
 -			else if (h.type === "del") { bg = colors.delBg; fg = colors.delFg; cls = "drv-del"; }
 -			else { bg = colors.ctxBg; cls = "drv-ctx"; }
@@ -80,19 +86,41 @@ index 34a3032..10c3e79 100644
 +				React.createElement('span', { className: 'drv-gutter drv-gutter-sign', style: { color: colors.gutter } }, h.type === 'add' ? '+' : h.type === 'del' ? '−' : ' '),
 +				React.createElement('span', { className: 'drv-gutter', style: { color: colors.gutter } }, h.b != null ? String(h.b) : ''),
 +				React.createElement('span', { className: 'drv-text' }, dshReviewTokens(h.text, path)));
-@@ -336 +394 @@ window.__ModuleLoader__.load({
+ 		}
+ 
 -		function Section({ section, onRevert, busy }) {
 +		function Section({ section, path, onRevert, busy }) {
-@@ -353 +411 @@ window.__ModuleLoader__.load({
+ 			const kindLabel = section.kind === "edit" ? "编辑" : "写入";
+ 			const cls = section.kind === "edit" ? "drv-badge-edit" : "drv-badge-new";
+ 			return React.createElement("div", { className: "drv-section" },
+@@ -350,7 +408,7 @@ window.__ModuleLoader__.load({
+ 						onClick: () => onRevert(section.opIndex)
+ 					}, "撤回此项") : null),
+ 				React.createElement("div", { className: "drv-section-body" },
 -					section.hunks.map((h, i) => React.createElement(Line, { key: i, h }))));
 +					section.hunks.map((h, i) => React.createElement(Line, { key: i, h, path }))));
-@@ -417 +475 @@ window.__ModuleLoader__.load({
+ 		}
+ 
+ 		const COLOR_ROWS = [
+@@ -414,7 +472,7 @@ window.__ModuleLoader__.load({
+ 						disabled: busy || detail.revertible !== true,
+ 						onClick: onRevertAll
+ 					}, "撤回全部修改")),
 -				detail.sections.map((sec, i) => React.createElement(Section, { key: i, section: sec, onRevert: onRevert, busy: busy })));
 +				detail.sections.map((sec, i) => React.createElement(Section, { key: i, section: sec, path: detail.path, onRevert: onRevert, busy: busy })));
-@@ -603 +661 @@ window.__ModuleLoader__.load({
+ 		}
+ 
+ 		// ── directory tree grouping for the review-pane file list ──────────────────
+@@ -600,7 +658,7 @@ window.__ModuleLoader__.load({
+ 								React.createElement("span", { className: "drv-turn-chevron" }, open ? "▾" : "▸")),
+ 							open ? React.createElement("div", { className: "drv-turn-file-body" },
+ 								f.sections.map((sec, i) => React.createElement(Section, {
 -									key: i, section: sec,
 +									key: i, section: sec, path: f.path,
-@@ -814,16 +814,17 @@ window.__ModuleLoader__.load({
+ 									onRevert: (opIndex) => revertOp(f.path, opIndex),
+ 									busy: busy
+ 								}))) : null);
+@@ -814,16 +872,17 @@ window.__ModuleLoader__.load({
  .drv-ctx { position:fixed; z-index:20000; min-width:150px; padding:4px; border:1px solid rgba(128,128,128,0.45); border-radius:8px; background:var(--dsw-alias-surface-2, #22272e); box-shadow:0 6px 18px rgba(0,0,0,0.35); }
  .drv-ctx-item { display:block; width:100%; border:none; background:transparent; color:inherit; text-align:left; padding:6px 10px; border-radius:6px; font-size:12px; font-family:inherit; cursor:pointer; }
  .drv-ctx-item:hover { background:rgba(80,120,255,0.28); }
@@ -120,7 +148,7 @@ index 34a3032..10c3e79 100644
  `;
  		function apply(ctx) {
  			ctxRef = ctx;
-@@ -866,4 +867,4 @@ window.__ModuleLoader__.load({
+@@ -866,4 +925,4 @@ window.__ModuleLoader__.load({
  		exports.apply = apply;
  		return module.exports;
  	}

@@ -187,12 +187,13 @@ test('buildEngineConfigOverrides: rejects invalid numeric ranges', () => {
   assert.equal(overrides.maxOverflowRetries, configDefaults.maxOverflowRetries)
 })
 
-test('applyEngineConfig clears a previous summarization override', () => {
+test('applyEngineConfig preserves a preset summarization target when selection is empty', () => {
   const engine = { config: { summarizationProvider: 'old', summarizationModel: 'old-model' } }
   const ctx = { get: () => engine }
+  assert.equal(applyEngineConfig(ctx, { provider: 'custom', model: 'custom-model' }), true)
   assert.equal(applyEngineConfig(ctx, { provider: '', model: '' }), true)
-  assert.equal(engine.config.summarizationProvider, '')
-  assert.equal(engine.config.summarizationModel, '')
+  assert.equal(engine.config.summarizationProvider, 'old')
+  assert.equal(engine.config.summarizationModel, 'old-model')
 })
 
 test('applyEngineConfig: merges overrides into compaction engine config', () => {
