@@ -237,7 +237,9 @@ function Ensure-DshChangeReviewPatched([string]$dshHome) {
   $clientFile = Join-Path $pluginDir 'lib\client.js'
   $hostOk = (Test-Path -LiteralPath $hostFile) -and ((Get-Content -Raw -LiteralPath $hostFile) -match 'where\.exe')
   $clientOk = (Test-Path -LiteralPath $clientFile) -and ((Get-Content -Raw -LiteralPath $clientFile) -match '--dsw-alias-bg-layer-2')
-  if ($hostOk -and $clientOk) {
+  $highlightOk = (Test-Path -LiteralPath $clientFile) -and
+    ((Get-Content -Raw -LiteralPath $clientFile) -match 'dshReviewTokens')
+  if ($hostOk -and $clientOk -and $highlightOk) {
     Write-Host "`n[skip] dsh-change-review patch already applied" -ForegroundColor DarkGray
     return
   }
