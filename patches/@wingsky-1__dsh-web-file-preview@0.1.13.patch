@@ -1,0 +1,12 @@
+diff --git a/lib/client.js b/lib/client.js
+index 24b6ab6..8fe026f 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -17872,7 +17872,6 @@ Please report this to https://github.com/markedjs/marked.`, e) {
+     try {
+       ensureStyle();
+       const captureHandler = (event) => onClickCapture(event, state);
+-      document.addEventListener("click", captureHandler, true);
+       try {
+         window.__DSH_CWD_SESSIONS__ = ctx && ctx.get ? ctx.get("sessions") : void 0;
+       } catch {

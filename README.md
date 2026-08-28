@@ -40,6 +40,21 @@ dsh web --no-open
 
 脚本可以重复运行；它只安装清单内插件，不会删除其他插件。
 
+## 更新到最新
+
+`install.cmd` 每次运行都会把环境带到最新：
+
+- **dsh CLI 本体**：对比 npm 上的最新版本，落后时自动执行 `npm install -g @deepseek-ai/dsh@latest`。
+- **全部插件**：一条 `pnpm update --latest` 批量更新——npm 源插件越过旧版本号升到最新，GitHub 源插件重新解析到分支最新提交。
+- **固定不动的插件**（带本地 pnpm 补丁，升到其他版本会丢补丁，因此钉在补丁版本）：
+  - `@wingsky-1/dsh-web-file-preview@0.1.13`
+  - `dsh-workbench-plugin@0.1.31`
+  - `dsh-change-review@0.3.0`
+  - `@deepseek-ai/dsh-compaction-basic@0.0.1-rc.3`
+- **本地插件**（`plugins/`、`vendor/` 下的 `link:` 依赖）：随本仓库文件即改即用，无需更新。
+
+离线时更新步骤会跳过并保留已装版本，安装流程不受影响。若要升级上面 4 个带补丁的插件，需要先用 `pnpm patch` 重做补丁，并同步修改 `install.ps1` 里的 `$patchTable` 和对应版本号。
+
 ## 安全提示
 
 文件预览插件面向本机 loopback 使用。不要在未配置认证的情况下把 DSH Web/API 端口暴露到不可信局域网或公网。

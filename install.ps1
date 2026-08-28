@@ -17,9 +17,12 @@ function Get-InstalledBundleNames([string]$dshHome) {
   # keys (every installed plugin is a dependency). `dsh.profile.bundles` only
   # lists plugins that also export a cordis patch layer, so it misses pure
   # client-side plugins (e.g. dsh-paste-input) — use dependencies, not bundles.
+  # -Encoding UTF8 matters: plugin package.json files carry Chinese
+  # descriptions, and on a GBK system the default encoding mojibakes them into
+  # invalid JSON (silent ConvertFrom-Json failure -> version detection breaks).
   $pkgFile = Join-Path $dshHome 'profiles\web\package.json'
   if (-not (Test-Path $pkgFile)) { return @() }
-  $pkg = Get-Content -Raw -LiteralPath $pkgFile | ConvertFrom-Json
+  $pkg = Get-Content -Raw -Encoding UTF8 -LiteralPath $pkgFile | ConvertFrom-Json
   return @($pkg.dependencies.PSObject.Properties.Name)
 }
 
@@ -35,8 +38,11 @@ function Get-NpmLatestVersion([string]$packageName) {
   if ($script:NpmLatestCache.ContainsKey($packageName)) { return $script:NpmLatestCache[$packageName] }
   $result = $null
   try {
-    $out = (& npm view $packageName version --silent 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -eq 0 -and $out) { $result = $out.ToString().Trim() }
+    # No `| Select-Object -First 1` here: it early-stops the pipeline, which
+    # kills npm mid-run (LASTEXITCODE=-1) under Windows PowerShell 5.1, so the
+    # version check below silently failed and every lookup returned null.
+    $out = @(& npm view $packageName version --silent 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $out) { $result = ([string]$out[0]).Trim() }
   } catch { $result = $null }
   $script:NpmLatestCache[$packageName] = $result
   return $result
@@ -49,18 +55,24 @@ function Get-InstalledVersion([string]$dshHome, [string]$packageName) {
   $versionFile = Join-Path (Join-Path (Join-Path $dshHome 'profiles\web\node_modules') $packageName) 'package.json'
   if (-not (Test-Path -LiteralPath $versionFile)) { return $null }
   try {
-    $pkg = Get-Content -Raw -LiteralPath $versionFile | ConvertFrom-Json
+    $pkg = Get-Content -Raw -Encoding UTF8 -LiteralPath $versionFile | ConvertFrom-Json
     return $pkg.version
   } catch { return $null }
 }
 
 function ConvertTo-VersionParts([string]$v) {
-  # Parse the leading numeric components of a semver-ish string into ints.
-  $m = [regex]::Match($v, '^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?')
+  # Parse a semver-ish string into comparable ints: major, minor, patch, the
+  # optional 4th numeric part, and a prerelease rank. A plain release ranks
+  # 999999 so it beats any prerelease, and the prerelease number breaks ties
+  # between prereleases: 0.1.1-rc.2 < 0.1.1-rc.3 < 0.1.1.
+  $m = [regex]::Match($v, '^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:-[A-Za-z]+\.?(\d*))?')
   if (-not $m.Success) { return @(0) }
   $parts = for ($i = 1; $i -le 4; $i++) {
     if ($m.Groups[$i].Success) { [int]$m.Groups[$i].Value } else { 0 }
   }
+  $pre = 999999
+  if ($m.Groups[5].Success) { $pre = if ($m.Groups[5].Value) { [int]$m.Groups[5].Value } else { 0 } }
+  $parts += $pre
   return ,$parts
 }
 
@@ -77,6 +89,18 @@ function Test-IsAtLeast([string]$installed, [string]$required) {
   return $true
 }
 
+# Packages whose installed version must stay at the exact version a local pnpm
+# patch (patches/, registered in Ensure-WorkspacePatch) was cut for. They are
+# excluded from the update pass and never floated to npm latest: moving them
+# off the pinned version would silently drop the patch. To update one of these,
+# re-cut the patch and bump the pinned version in $patchTable.
+$script:PatchPinnedPackages = @(
+  '@wingsky-1/dsh-web-file-preview',
+  'dsh-workbench-plugin',
+  'dsh-change-review',
+  '@deepseek-ai/dsh-compaction-basic'
+)
+
 function Get-TargetVersion([string]$bundleName, [string]$spec) {
   # Determine the version the plugin should be at before we skip a re-install:
   #   * if the spec pins an explicit version (name@1.2.3), that is the floor;
@@ -85,12 +109,78 @@ function Get-TargetVersion([string]$bundleName, [string]$spec) {
   # is not published to npm) -> caller falls back to skip-if-installed.
   $pinned = $null
   if ($spec -match '^@?[^@]+@([0-9][^/]*)$') { $pinned = $Matches[1] }
+  # Patch-pinned packages never float to npm latest: their local pnpm patch is
+  # registered for one exact version (see $script:PatchPinnedPackages), so the
+  # pin itself is the only valid target.
+  if ($script:PatchPinnedPackages -contains $bundleName) { return $pinned }
   $latest = Get-NpmLatestVersion $bundleName
   if ($latest -and $pinned) {
     if (Test-IsAtLeast $latest $pinned) { return $latest } else { return $pinned }
   }
   if ($latest) { return $latest }
   return $pinned
+}
+
+function Update-DshCli {
+  # Update the globally-installed dsh CLI itself to the latest npm version, so
+  # plugin adds and the built-in preset edits below run against current code.
+  # Skips (never fails) when offline or when the installed version is unreadable:
+  # a CLI check must not block installation.
+  $latest = Get-NpmLatestVersion '@deepseek-ai/dsh'
+  if (-not $latest) {
+    Write-Host "`n[skip] dsh CLI: latest version unknown (offline?)" -ForegroundColor DarkGray
+    return
+  }
+  $installed = $null
+  try {
+    $raw = @(& dsh --version 2>$null)
+    if ($raw.Count -gt 0) { $installed = ([string]$raw[0]).Trim() }
+  } catch { $installed = $null }
+  if (-not $installed) {
+    Write-Host "`n[skip] dsh CLI: installed version unknown" -ForegroundColor DarkGray
+    return
+  }
+  if (Test-IsAtLeast $installed $latest) {
+    Write-Host "`n[skip] dsh CLI already at latest ($installed)" -ForegroundColor DarkGray
+    return
+  }
+  Write-Host "`n[update] dsh CLI ($installed -> $latest)" -ForegroundColor Yellow
+  Write-Host ">>> npm install -g @deepseek-ai/dsh@latest" -ForegroundColor Cyan
+  & npm install -g '@deepseek-ai/dsh@latest'
+  if ($LASTEXITCODE -ne 0) { throw 'dsh CLI update failed' }
+}
+
+function Update-InstalledPlugins([string]$dshHome) {
+  # Bring every installed plugin to its latest version in one pnpm pass. This is
+  # the only mechanism that refreshes git-hosted plugins: their resolved commit
+  # is pinned in pnpm-lock.yaml, so neither the npm-latest check in
+  # Add-DshPluginIfMissing nor a repeated `dsh plugin add` moves them. pnpm
+  # `update --latest` re-resolves git refs to the current branch head and moves
+  # registry packages past their saved range. Excluded from the pass:
+  #   * link:/file:/workspace: deps - local plugins from this repository;
+  #   * $script:PatchPinnedPackages - updating them off the pinned version
+  #     would silently drop the local pnpm patch.
+  # The pass is non-fatal so an offline run can still install and repair.
+  $pkgFile = Join-Path $dshHome 'profiles\web\package.json'
+  if (-not (Test-Path $pkgFile)) { return }
+  $pkg = Get-Content -Raw -Encoding UTF8 -LiteralPath $pkgFile | ConvertFrom-Json
+  if (-not $pkg.dependencies) { return }
+  $names = @()
+  foreach ($dep in $pkg.dependencies.PSObject.Properties) {
+    $spec = [string]$dep.Value
+    if ($spec -match '^(link|file|workspace):') { continue }
+    if ($script:PatchPinnedPackages -contains $dep.Name) {
+      Write-Host "[pinned] $($dep.Name) stays at its patch version" -ForegroundColor DarkGray
+      continue
+    }
+    $names += $dep.Name
+  }
+  if ($names.Count -eq 0) { return }
+  Write-Host "`n>>> dsh plugin --profile web update --latest ($($names.Count) plugins)" -ForegroundColor Cyan
+  & dsh plugin --profile web update --latest @names
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host '[warn] plugin update pass failed (offline?); keeping the installed versions' -ForegroundColor Yellow
+  }
 }
 
 function Add-DshPluginIfMissing([string]$bundleName, [string]$spec) {
@@ -143,9 +233,9 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   # file under $repoRoot\patches and is copied into the profile's patches/ dir
   # AND registered in patchedDependencies below.
   $patchTable = [ordered]@{
-    '@wingsky-1/dsh-web-file-preview@0.1.9' = 'patches/@wingsky-1__dsh-web-file-preview@0.1.9.patch'
+    '@wingsky-1/dsh-web-file-preview@0.1.13' = 'patches/@wingsky-1__dsh-web-file-preview@0.1.13.patch'
     'dsh-change-review@0.3.0' = 'patches/dsh-change-review@0.3.0.patch'
-    'dsh-workbench-plugin@0.1.27' = 'patches/dsh-workbench-plugin@0.1.27.patch'
+    'dsh-workbench-plugin@0.1.31' = 'patches/dsh-workbench-plugin@0.1.31.patch'
     '@deepseek-ai/dsh-compaction-basic@0.0.1-rc.3' = 'patches/@deepseek-ai__dsh-compaction-basic@0.0.1-rc.3.patch'
   }
   New-Item -ItemType Directory -Force $profile, $patchDir | Out-Null
@@ -182,6 +272,10 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   $built = [System.Collections.Generic.List[string]]::new()  # onlyBuiltDependencies list
   $topLines = [System.Collections.Generic.List[string]]::new()
   $currentBlock = $null
+  # Managed packages' patch keys are rebuilt from $patchTable below; a key
+  # left over from an older pinned version makes pnpm fail with
+  # ERR_PNPM_UNUSED_PATCH (unused patch = fatal in pnpm 10).
+  $managedNames = @($patchTable.Keys | ForEach-Object { if ($_ -match '^(.+)@[^@]+$') { $Matches[1] } else { $_ } })
   foreach ($ln in $lines) {
     $trimmed = $ln.TrimEnd()
     if ($trimmed -eq '' -or $trimmed -match '^\s*#') { continue }
@@ -192,7 +286,9 @@ function Ensure-WorkspacePatch([string]$dshHome) {
       if ($trimmed -match '^\s*([^:]+?)\s*:\s*(.+?)\s*$') {
         $k = $Matches[1].Trim().Trim("'").Trim('"')
         $v = $Matches[2].Trim().Trim("'").Trim('"')
-        $patched[$k] = $v
+        # drop stale pinned-version keys of managed packages (see managedNames)
+        $kName = if ($k -match '^(.+)@[^@]+$') { $Matches[1] } else { $k }
+        if ($managedNames -notcontains $kName) { $patched[$k] = $v }
       }
     } elseif ($currentBlock -eq 'built') {
       if ($trimmed -match '^\s*-\s*(.+?)\s*$') {
@@ -262,8 +358,11 @@ function Ensure-DshChangeReviewPatched([string]$dshHome) {
     Set-Content -LiteralPath $workspaceFile -Value $original -Encoding utf8
   }
 
-  Write-Host "`n>>> dsh plugin --profile web add github:cirelir/dsh-change-review (apply patch)" -ForegroundColor Cyan
-  & dsh plugin --profile web add github:cirelir/dsh-change-review
+  # Pinned re-add: the patch is registered for exactly 0.3.0, which is commit
+  # 1f2de55 (still upstream HEAD today). Pinning the commit keeps re-adds
+  # deterministic; a floating spec would land on an unpatched newer commit.
+  Write-Host "`n>>> dsh plugin --profile web add github:cirelir/dsh-change-review#1f2de55 (apply patch)" -ForegroundColor Cyan
+  & dsh plugin --profile web add 'github:cirelir/dsh-change-review#1f2de55b3f95dd1c513e713fe56664648ca2e447'
   if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-change-review with repository patch' }
 }
 
@@ -297,8 +396,9 @@ function Ensure-CompactionBasicPatched([string]$dshHome) {
     Set-Content -LiteralPath $workspaceFile -Value $original -Encoding utf8
   }
 
-  Write-Host "`n>>> dsh plugin --profile web add @deepseek-ai/dsh-compaction-basic (apply range-safety patch)" -ForegroundColor Cyan
-  & dsh plugin --profile web add '@deepseek-ai/dsh-compaction-basic'
+  # Pinned re-add: the patch is registered for exactly 0.0.1-rc.3.
+  Write-Host "`n>>> dsh plugin --profile web add @deepseek-ai/dsh-compaction-basic@0.0.1-rc.3 (apply range-safety patch)" -ForegroundColor Cyan
+  & dsh plugin --profile web add '@deepseek-ai/dsh-compaction-basic@0.0.1-rc.3'
   if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-compaction-basic with range-safety patch' }
 }
 
@@ -317,10 +417,10 @@ function Ensure-DshWorkbenchPatched([string]$dshHome) {
     $clientText -match 'tree\.editor\.qoder' -and
     $clientText -match 'tree\.editor\.workbuddy'
   $cppLanguageOk = $clientText -match 'cmakelists\.txt' -and
-    $clientText -match 'case`cpp`:return XE\(\{typescript:!0\}\)'
+    $clientText -match 'case`cpp`:return th\(\{typescript:!0\}\)'
   $syntaxHighlightOk = $clientText -match 'dshCmakeSyntax' -and
     $clientText -match 'dshDiffTokens' -and
-    $clientText -match 'function Sj\(e\)\{let t=e\.replace'
+    $clientText -match 'function sv\(e\)\{let t=e\.replace\(/\\\\/g'
   if ($hostText -match 'windowsAppPaths' -and $hostText -match 'id: "trae"' -and $localeOk -and $cppLanguageOk -and $syntaxHighlightOk) {
     Write-Host "`n[skip] dsh-workbench-plugin editor catalog patch already applied" -ForegroundColor DarkGray
     return
@@ -329,7 +429,7 @@ function Ensure-DshWorkbenchPatched([string]$dshHome) {
   $workspaceFile = Join-Path $dshHome 'profiles\web\pnpm-workspace.yaml'
   if (-not (Test-Path -LiteralPath $workspaceFile)) { throw "Missing DSH workspace file: $workspaceFile" }
   $original = Get-Content -Raw -LiteralPath $workspaceFile
-  $withoutPatch = [regex]::Replace($original, "(?m)^[ \t]*'dsh-workbench-plugin@0\.1\.27':[^\r\n]*(?:\r?\n|$)", '')
+  $withoutPatch = [regex]::Replace($original, "(?m)^[ \t]*'dsh-workbench-plugin@0\.1\.31':[^\r\n]*(?:\r?\n|$)", '')
   try {
     if ($withoutPatch -ne $original) {
       Set-Content -LiteralPath $workspaceFile -Value $withoutPatch -Encoding utf8
@@ -341,8 +441,10 @@ function Ensure-DshWorkbenchPatched([string]$dshHome) {
     Set-Content -LiteralPath $workspaceFile -Value $original -Encoding utf8
   }
 
-  Write-Host "`n>>> dsh plugin --profile web add dsh-workbench-plugin (apply patch)" -ForegroundColor Cyan
-  & dsh plugin --profile web add dsh-workbench-plugin
+  # Pinned re-add: the patch is registered for exactly 0.1.27, so re-installing
+  # a bare (floating) spec would land on an unpatched newer npm release.
+  Write-Host "`n>>> dsh plugin --profile web add dsh-workbench-plugin@0.1.31 (apply patch)" -ForegroundColor Cyan
+  & dsh plugin --profile web add 'dsh-workbench-plugin@0.1.31'
   if ($LASTEXITCODE -ne 0) { throw 'Failed to reinstall dsh-workbench-plugin with repository patch' }
 }
 
@@ -423,7 +525,12 @@ function Ensure-CompactionSummarizationConfig([string]$dshHome) {
 
 Require-Command 'dsh'
 Require-Command 'node'
+Require-Command 'npm'
 Require-Command 'pnpm'
+
+# Bring the dsh CLI itself to the latest version first, so plugin adds and the
+# built-in preset fixes below run against current code.
+Update-DshCli
 
 $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }
 $dshHome = [IO.Path]::GetFullPath($dshHome)
@@ -432,10 +539,14 @@ $dshHome = [IO.Path]::GetFullPath($dshHome)
 # fresh profiles: pnpm evaluates every registered patch during an add/update,
 # so the first install must already see the dsh-change-review/compaction patches.
 Ensure-WorkspacePatch $dshHome
+# Update everything already installed (registry + git-hosted plugins) in one
+# pnpm pass, before the per-plugin install checks below.
+Update-InstalledPlugins $dshHome
 # Install the patched package before the remaining plugins so its patch is not
 # treated as unused during later installs.
-Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-file-preview@0.1.9'
-Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin'
+Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-file-preview@0.1.13'
+# Pinned spec: a bare name would float to unpatched npm latest on fresh installs.
+Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin@0.1.31'
 Ensure-DshWorkbenchPatched $dshHome
 Ensure-CompactionBasicPatched $dshHome
 if (-not $SkipSettings) { Ensure-ModelSettings $dshHome }
@@ -465,7 +576,7 @@ $registryPlugins = @(
 
   # --- compaction backend (required by dsh-active-context-pruning's acp_compress;
   #     provides ctx.compaction.compactRegion. auto:true by default = real auto compaction) ---
-  @('@deepseek-ai/dsh-compaction-basic', '@deepseek-ai/dsh-compaction-basic'),
+  @('@deepseek-ai/dsh-compaction-basic', '@deepseek-ai/dsh-compaction-basic@0.0.1-rc.3'),
 
   # --- developer-experience additions (verified, no conflict with the above) ---
   @('@deepseek-ai/dsh-lsp', 'github:omdsh-dev/dsh-lsp'),
