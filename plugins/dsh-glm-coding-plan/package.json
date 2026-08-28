@@ -1,0 +1,33 @@
+{
+  "name": "dsh-glm-coding-plan",
+  "version": "0.1.0",
+  "description": "DSH plugin: 注册智谱 GLM Coding Plan provider（bigmodel.cn，OpenAI 兼容端点），通过 base 层补丁注入 llm-pi-ai 设置，不动用户 settings.yaml。",
+  "author": "llt",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "test.mjs",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6"
+  },
+  "license": "MIT"
+}

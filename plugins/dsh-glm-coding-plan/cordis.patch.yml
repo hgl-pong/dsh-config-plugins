@@ -1,0 +1,79 @@
+# dsh-glm-coding-plan bundle patch.
+# 1) register itself as one Loader row.
+# 2) inject the custom provider "glm-coding-plan" into the llm-pi-ai settings
+#    BASE layer (composition base, NOT the user settings.yaml), so the model
+#    rows survive installs/reinstalls and disappear on uninstall. The route
+#    reads the GLM_CODING_PLAN_API_KEY credential and speaks openai-completions
+#    to the GLM Coding Plan endpoint:
+#      https://open.bigmodel.cn/api/coding/paas/v4   (official quick-start,
+#      OpenAI Chat Completion protocol — the only protocol GLM Coding Plan
+#      subscribers can currently use for glm-5.3)
+#
+# Thinking dispatch (ADR-0001: docs/decisions/adr/0001-glm-coding-plan-thinking-dispatch.md):
+#   - glm-5.3 / glm-5.3-flash: thinking is ALWAYS on; `thinking.type: "disabled"`
+#     makes the request fail. reasoningEfforts.off therefore maps to `low`
+#     (the official migration advice: enabled + reasoning_effort low), so
+#     compaction/ACP sending "off" degrades to light thinking instead of an error.
+#   - glm-5.2 and older: off -> null disables thinking normally.
+#   - All rows pin compat { thinkingFormat: zai } (pi-ai's Z.ai/GLM request
+#     shape; pi-ai also auto-detects open.bigmodel.cn as zai). Only
+#     thinkingFormat / supportsReasoningEffort may appear here: dsh-llm-pi-ai
+#     refuses compat fields its gate withholds, and a refused field would
+#     reject the whole provider.
+
+- insert:
+    - id: dsh-glm-coding-plan
+      name: dsh-glm-coding-plan
+
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      glm-coding-plan:
+        displayName: GLM Coding Plan
+        apiKeyEnv: GLM_CODING_PLAN_API_KEY
+        api: openai-completions
+        baseURL: https://open.bigmodel.cn/api/coding/paas/v4
+        models:
+        - id: glm-5.3
+          name: GLM-5.3
+          contextWindow: 1000000
+          maxTokens: 131072
+          input: [text]
+          reasoningEfforts: { off: low, low: low, medium: high, high: high, max: max }
+          compat: { thinkingFormat: zai, supportsReasoningEffort: true }
+        - id: glm-5.3-flash
+          name: GLM-5.3-Flash
+          contextWindow: 1000000
+          maxTokens: 131072
+          input: [text, image]
+          reasoningEfforts: { off: low, low: low, medium: high, high: high, max: max }
+          compat: { thinkingFormat: zai, supportsReasoningEffort: true }
+        - id: glm-5.2
+          name: GLM-5.2
+          contextWindow: 1000000
+          maxTokens: 131072
+          input: [text]
+          reasoningEfforts: { off: null, low: high, medium: high, high: high, max: max }
+          compat: { thinkingFormat: zai, supportsReasoningEffort: true }
+        - id: glm-5.1
+          name: GLM-5.1
+          contextWindow: 200000
+          maxTokens: 131072
+          input: [text]
+          reasoningEfforts: { off: null, high: high }
+          compat: { thinkingFormat: zai, supportsReasoningEffort: false }
+        - id: glm-5-turbo
+          name: GLM-5-Turbo
+          contextWindow: 200000
+          maxTokens: 131072
+          input: [text]
+          reasoningEfforts: { off: null, high: high }
+          compat: { thinkingFormat: zai, supportsReasoningEffort: false }
+        - id: glm-4.7
+          name: GLM-4.7
+          contextWindow: 204800
+          maxTokens: 131072
+          input: [text]
+          reasoningEfforts: { off: null, high: high }
+          compat: { thinkingFormat: zai, supportsReasoningEffort: false }
