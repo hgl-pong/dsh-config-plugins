@@ -1,10 +1,10 @@
-﻿import test from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { GLM_PROVIDER, GLM_MODELS, isGlmCodingRoute } from './index.js'
+import { GLM_PROVIDER, GLM_MODELS, isGlmCodingRoute, AGNES_PROVIDER, isAgnesRoute, tuneAgnesOptions } from './index.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (name) => readFileSync(join(here, name), 'utf8')
@@ -46,14 +46,14 @@ const MODEL_FACTS = {
   },
 }
 
-test('provider metadata: id / env / protocol / endpoint', () => {
+test('glm provider metadata: id / env / protocol / endpoint', () => {
   assert.equal(GLM_PROVIDER.id, 'glm-coding-plan')
   assert.equal(GLM_PROVIDER.apiKeyEnv, 'GLM_CODING_PLAN_API_KEY')
   assert.equal(GLM_PROVIDER.api, 'openai-completions')
   assert.equal(GLM_PROVIDER.baseURL, 'https://open.bigmodel.cn/api/coding/paas/v4')
 })
 
-test('model list is exactly the six coding-plan models with verified facts', () => {
+test('glm model list is exactly the six coding-plan models with verified facts', () => {
   assert.deepEqual([...GLM_MODELS].map((m) => m.id).sort(), Object.keys(MODEL_FACTS).sort())
   for (const model of GLM_MODELS) {
     const facts = MODEL_FACTS[model.id]
@@ -66,8 +66,6 @@ test('model list is exactly the six coding-plan models with verified facts', () 
   }
 })
 
-// GLM-5.3 系思考常开：off 必须降级为 low（compaction 发 off 不得变成 thinking disabled）。
-// glm-5.2 及更早支持关闭：off 必须是 null。
 test('compaction safety: off maps to low on 5.3 pair, null on the rest', () => {
   for (const id of ['glm-5.3', 'glm-5.3-flash']) {
     const row = GLM_MODELS.find((m) => m.id === id)
@@ -80,7 +78,7 @@ test('compaction safety: off maps to low on 5.3 pair, null on the rest', () => {
   }
 })
 
-test('route matcher targets only the glm-coding-plan route', () => {
+test('glm route matcher targets only the glm-coding-plan route', () => {
   assert.equal(isGlmCodingRoute('glm-coding-plan'), true)
   assert.equal(isGlmCodingRoute('GLM-CODING-PLAN'), true)
   assert.equal(isGlmCodingRoute('glm-coding-plan-ext'), true)
@@ -91,6 +89,67 @@ test('route matcher targets only the glm-coding-plan route', () => {
   assert.equal(isGlmCodingRoute(undefined), false)
 })
 
+// ---- Agnes（已整合的原 dsh-agnes-provider 功能）----
+test('agnes provider metadata: id / env / protocol / endpoint', () => {
+  assert.equal(AGNES_PROVIDER.id, 'agnes')
+  assert.equal(AGNES_PROVIDER.apiKeyEnv, 'AGNES_API_KEY')
+  assert.equal(AGNES_PROVIDER.api, 'openai-completions')
+  assert.equal(AGNES_PROVIDER.baseURL, 'https://apihub.agnes-ai.com/v1')
+})
+
+test('agnes route matcher targets agnes routes only', () => {
+  assert.equal(isAgnesRoute('agnes'), true)
+  assert.equal(isAgnesRoute('agnes-2.5-flash'), true)
+  assert.equal(isAgnesRoute('agnes-official'), true)
+  assert.equal(isAgnesRoute('opencode-go-plus'), false)
+  assert.equal(isAgnesRoute('deepseek-v4-flash'), false)
+  assert.equal(isAgnesRoute(undefined), false)
+})
+
+test('agnes thinking: enables for any non-off reasoning effort', () => {
+  const opts = { provider: 'agnes', reasoningEffort: 'high' }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, true)
+  assert.equal(opts.chat_template_kwargs.enable_thinking, true)
+})
+
+test('agnes thinking: disables for off reasoning effort (compaction path)', () => {
+  const opts = { provider: 'agnes', purpose: 'compaction', reasoningEffort: 'off' }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, false)
+  assert.equal(opts.chat_template_kwargs.enable_thinking, false)
+  assert.equal(opts.provider, 'agnes')
+  assert.equal(opts.purpose, 'compaction')
+})
+
+test('agnes keeps existing chat_template_kwargs intact', () => {
+  const opts = { provider: 'agnes', reasoningEffort: 'high', chatTemplateKwargs: { foo: 1 } }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, true)
+  assert.equal(opts.chatTemplateKwargs.foo, 1)
+})
+
+test('agnes supports the snake-case kwargs shape and case-insensitive off', () => {
+  const opts = { provider: 'agnes', reasoningEffort: 'OFF', chat_template_kwargs: { foo: 1 } }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.foo, 1)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, false)
+  assert.equal(opts.chat_template_kwargs, opts.chatTemplateKwargs)
+})
+
+test('agnes replaces malformed kwargs containers instead of throwing', () => {
+  const opts = { provider: 'agnes', reasoningEffort: 'high', chatTemplateKwargs: 'invalid' }
+  tuneAgnesOptions(opts)
+  assert.equal(opts.chatTemplateKwargs.enable_thinking, true)
+})
+
+test('agnes leaves non-Agnes options untouched', () => {
+  const opts = { provider: 'deepseek-v4-flash', reasoningEffort: 'max' }
+  tuneAgnesOptions(opts)
+  assert.deepEqual(opts, { provider: 'deepseek-v4-flash', reasoningEffort: 'max' })
+})
+
+// ---- 产物结构（cordis.patch.yml / package.json / README）----
 test('package.json declares the bundle patch and zero deps', () => {
   assert.equal(pkg.name, 'dsh-glm-coding-plan')
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml')
@@ -108,19 +167,25 @@ test('cordis.patch.yml registers the loader row and the llm-pi-ai provider', () 
   assert.match(patch, /baseURL: https:\/\/open\.bigmodel\.cn\/api\/coding\/paas\/v4/)
 })
 
-test('cordis.patch.yml lists exactly the same model ids as index.js', () => {
+test('cordis.patch.yml hosts BOTH agnes and glm providers in ONE llm-pi-ai entry', () => {
+  assert.match(patch, /^\s{6}agnes:\s*$/m)
+  assert.match(patch, /apiKeyEnv: AGNES_API_KEY/)
+  assert.match(patch, /baseURL: https:\/\/apihub\.agnes-ai\.com\/v1/)
+  assert.match(patch, /compat: \{ thinkingFormat: chat-template, supportsReasoningEffort: false \}/)
+})
+
+test('cordis.patch.yml lists exactly the same glm model ids as index.js', () => {
   const yamlIds = [...patch.matchAll(/^\s{8}- id: (\S+)$/gm)].map((m) => m[1])
-  assert.deepEqual(yamlIds.sort(), [...GLM_MODELS].map((m) => m.id).sort())
+  const expected = [...GLM_MODELS].map((m) => m.id).concat(['agnes-2.5-flash']).sort()
+  assert.deepEqual(yamlIds.sort(), expected)
 })
 
 test('cordis.patch.yml maps off to low for the 5.3 pair and null for the rest', () => {
   assert.equal((patch.match(/off: low/g) ?? []).length, 2, 'exactly glm-5.3 and glm-5.3-flash')
-  assert.equal((patch.match(/off: null/g) ?? []).length, 4, 'glm-5.2/5.1/5-turbo/4.7')
+  assert.equal((patch.match(/off: null/g) ?? []).length, 5, 'glm-5.2/5.1/5-turbo/4.7 + agnes')
 })
 
 test('cordis.patch.yml never sets the withheld zaiToolStream compat field', () => {
-  // dsh-llm-pi-ai resolveModelCompat refuses fields its gate withholds;
-  // zaiToolStream is "withhold" — writing it would reject the whole provider.
   assert.doesNotMatch(patch, /zaiToolStream/)
 })
 
@@ -132,8 +197,10 @@ test('no secret literals in any shipped file', () => {
   }
 })
 
-test('README documents endpoint, env var, and the off-to-low rationale', () => {
+test('README documents both providers, endpoints, env vars, and off-to-low rationale', () => {
   assert.match(readme, /https:\/\/open\.bigmodel\.cn\/api\/coding\/paas\/v4/)
   assert.match(readme, /GLM_CODING_PLAN_API_KEY/)
+  assert.match(readme, /AGNES_API_KEY/)
+  assert.match(readme, /apihub\.agnes-ai\.com/)
   assert.match(readme, /off.*low|low.*off/)
 })

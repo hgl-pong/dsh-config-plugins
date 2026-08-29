@@ -1,13 +1,15 @@
 # dsh-glm-coding-plan bundle patch.
 # 1) register itself as one Loader row.
-# 2) inject the custom provider "glm-coding-plan" into the llm-pi-ai settings
-#    BASE layer (composition base, NOT the user settings.yaml), so the model
-#    rows survive installs/reinstalls and disappear on uninstall. The route
-#    reads the GLM_CODING_PLAN_API_KEY credential and speaks openai-completions
-#    to the GLM Coding Plan endpoint:
-#      https://open.bigmodel.cn/api/coding/paas/v4   (official quick-start,
-#      OpenAI Chat Completion protocol — the only protocol GLM Coding Plan
-#      subscribers can currently use for glm-5.3)
+# 2) inject TWO custom providers into the llm-pi-ai settings BASE layer
+#    (ONE llm-pi-ai entry, ONE providers map - so they can never overwrite
+#    each other across plugin patches):
+#
+#      glm-coding-plan - Zhipu GLM Coding Plan (bigmodel.cn)
+#        baseURL: https://open.bigmodel.cn/api/coding/paas/v4
+#        (official quick-start, OpenAI Chat Completion protocol - the only
+#        protocol GLM Coding Plan subscribers can currently use for glm-5.3)
+#      agnes - Agnes AI (merged in from the former dsh-agnes-provider plugin)
+#        baseURL: https://apihub.agnes-ai.com/v1
 #
 # Thinking dispatch (ADR-0001: docs/decisions/adr/0001-glm-coding-plan-thinking-dispatch.md):
 #   - glm-5.3 / glm-5.3-flash: thinking is ALWAYS on; `thinking.type: "disabled"`
@@ -15,7 +17,11 @@
 #     (the official migration advice: enabled + reasoning_effort low), so
 #     compaction/ACP sending "off" degrades to light thinking instead of an error.
 #   - glm-5.2 and older: off -> null disables thinking normally.
-#   - All rows pin compat { thinkingFormat: zai } (pi-ai's Z.ai/GLM request
+#   - agnes: thinking is an on/off boolean via chat_template_kwargs
+#     (translated by the index.js stream hook), so reasoningEfforts only
+#     whitelists legal effort names - `off` MUST be present or compaction's
+#     reasoning_effort:"off" is rejected by pi-ai validation.
+#   - All GLM rows pin compat { thinkingFormat: zai } (pi-ai's Z.ai/GLM request
 #     shape; pi-ai also auto-detects open.bigmodel.cn as zai). Only
 #     thinkingFormat / supportsReasoningEffort may appear here: dsh-llm-pi-ai
 #     refuses compat fields its gate withholds, and a refused field would
@@ -77,3 +83,16 @@
           input: [text]
           reasoningEfforts: { off: null, high: high }
           compat: { thinkingFormat: zai, supportsReasoningEffort: false }
+      agnes:
+        displayName: Agnes AI
+        apiKeyEnv: AGNES_API_KEY
+        api: openai-completions
+        baseURL: https://apihub.agnes-ai.com/v1
+        models:
+        - id: agnes-2.5-flash
+          name: Agnes 2.5 Flash
+          contextWindow: 524288
+          maxTokens: 65536
+          input: [text, image]
+          reasoningEfforts: { off: null, high: high }
+          compat: { thinkingFormat: chat-template, supportsReasoningEffort: false }

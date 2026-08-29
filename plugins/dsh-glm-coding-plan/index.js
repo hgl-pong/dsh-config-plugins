@@ -1,28 +1,33 @@
 /**
  * dsh-glm-coding-plan — DSH plugin.
  *
- * Registers the Zhipu GLM Coding Plan provider (bigmodel.cn) by injecting it
- * into the llm-pi-ai settings BASE layer via cordis.patch.yml.
+ * Registers TWO providers by injecting them into the llm-pi-ai settings BASE
+ * layer via cordis.patch.yml (ONE llm-pi-ai entry, ONE providers map — so the
+ * two providers can never overwrite each other across plugin patches):
  *
- *   Endpoint (official quick-start, OpenAI Chat Completion protocol):
- *     https://open.bigmodel.cn/api/coding/paas/v4
- *   Docs: https://docs.bigmodel.cn/cn/coding-plan/quick-start
+ *   1. glm-coding-plan — Zhipu GLM Coding Plan (bigmodel.cn)
+ *      Endpoint (official quick-start, OpenAI Chat Completion protocol):
+ *        https://open.bigmodel.cn/api/coding/paas/v4
+ *      Docs: https://docs.bigmodel.cn/cn/coding-plan/quick-start
  *
- * Design notes (ADR-0001: docs/decisions/adr/0001-glm-coding-plan-thinking-dispatch.md):
- *   - Thinking dispatch is left entirely to pi-ai's native `zai`
- *     thinkingFormat (the openai-completions adapter also auto-detects
- *     open.bigmodel.cn as a Z.ai-compatible endpoint), so this plugin ships
- *     NO stream hook. apply() only logs that the base patch is active.
- *   - glm-5.3 / glm-5.3-flash think with no off switch: the endpoint rejects
- *     `thinking: { type: "disabled" }`. Their reasoningEfforts map `off` to
- *     `low` so compaction (which requests "off") degrades to light thinking
- *     instead of a failed request. glm-5.2 and older models keep `off: null`.
+ *   2. agnes — Agnes AI (apihub.agnes-ai.com), merged in from the former
+ *      dsh-agnes-provider plugin.
+ *
+ * Design notes (ADR-0001 / ADR-0002):
+ *   - GLM thinking dispatch is left to pi-ai's native `zai` thinkingFormat
+ *     (open.bigmodel.cn is also auto-detected as zai), so GLM routes need NO
+ *     stream hook. glm-5.3 / glm-5.3-flash always think — their
+ *     reasoningEfforts map `off` to `low` so compaction degrades instead of
+ *     failing (the endpoint rejects thinking.type disabled).
+ *   - Agnes enables "Thinking" via chat_template_kwargs.enable_thinking (a
+ *     boolean), NOT reasoning_effort — a stream hook translates DSH's
+ *     reasoningEffort into that boolean for Agnes routes only.
  */
 
 export const name = 'dsh-glm-coding-plan'
 export const inject = ['llm']
 
-/** The provider row injected by cordis.patch.yml. */
+/** The GLM Coding Plan provider row injected by cordis.patch.yml. */
 export const GLM_PROVIDER = Object.freeze({
   id: 'glm-coding-plan',
   displayName: 'GLM Coding Plan',
@@ -32,14 +37,8 @@ export const GLM_PROVIDER = Object.freeze({
 })
 
 /**
- * The coding-plan model rows (must stay in sync with cordis.patch.yml —
+ * The GLM coding-plan model rows (must stay in sync with cordis.patch.yml —
  * test.mjs cross-checks the two).
- *
- * reasoningEfforts:
- *   - glm-5.3 / glm-5.3-flash: off -> low (thinking is always on upstream;
- *     "off" must degrade to the lightest level, never to disabled).
- *   - glm-5.2: pi-ai catalog mapping (low/medium promote to high; max stays).
- *   - glm-5.1 / glm-5-turbo / glm-4.7: on/off only.
  */
 export const GLM_MODELS = Object.freeze([
   Object.freeze({
@@ -103,7 +102,53 @@ export function isGlmCodingRoute(provider) {
   return typeof provider === 'string' && /^glm-coding-plan(?:-|$)/i.test(provider)
 }
 
+/** The Agnes AI provider row injected by cordis.patch.yml. */
+export const AGNES_PROVIDER = Object.freeze({
+  id: 'agnes',
+  displayName: 'Agnes AI',
+  apiKeyEnv: 'AGNES_API_KEY',
+  api: 'openai-completions',
+  baseURL: 'https://apihub.agnes-ai.com/v1',
+})
+
+/** Whether one provider route talks to Agnes AI. */
+export function isAgnesRoute(provider) {
+  return typeof provider === 'string' && /^agnes(?:-|$)/i.test(provider)
+}
+
+/**
+ * Translate DSH's reasoning request into Agnes' chat_template_kwargs.
+ * Agnes enables "Thinking" via an on/off boolean, NOT reasoning_effort: any
+ * non-"off" effort requests thinking; "off" (as compaction/ACP sends)
+ * explicitly disables it. Returns the mutated options (same reference) or the
+ * original when the route is not Agnes.
+ */
+export function tuneAgnesOptions(options) {
+  if (!options || !isAgnesRoute(options?.provider)) return options
+  try {
+    const effort = options.reasoningEffort
+    const enableThinking = effort != null && String(effort).toLowerCase() !== 'off'
+    const camel = options.chatTemplateKwargs
+    const snake = options.chat_template_kwargs
+    const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+    let kwargs = {}
+    if (isRecord(camel)) kwargs = camel
+    else if (isRecord(snake)) kwargs = snake
+    if (kwargs !== snake && isRecord(snake)) Object.assign(kwargs, snake)
+    kwargs.enable_thinking = enableThinking
+    options.chatTemplateKwargs = kwargs
+    // Some DSH layers read the camelCase spelling; set both defensively.
+    options.chat_template_kwargs = kwargs
+  } catch {
+    // never let a tuning failure break the request
+  }
+  return options
+}
+
 export function apply(ctx) {
-  // 注册日志即可：思考分派由 pi-ai 原生 zai thinkingFormat 承担，无需流式钩子。
-  ctx.logger.info('dsh-glm-coding-plan: glm-coding-plan provider registered via base patch (no stream hook)')
+  ctx.logger.info('dsh-glm-coding-plan: glm-coding-plan + agnes providers registered via base patch (agnes stream hook active)')
+  ctx.on('llm/stream', (options, next) => {
+    tuneAgnesOptions(options)
+    return next()
+  })
 }
