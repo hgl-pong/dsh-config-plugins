@@ -107,7 +107,6 @@ $script:PatchPinnedPackages = @(
 # pin. To move one of these, install the new commit manually, then update its
 # spec in $registryPlugins.
 $script:CommitPinnedPackages = @(
-  'dsh-antigravity',
   'dsh-tavily-workspace'
 )
 
@@ -275,7 +274,8 @@ function Ensure-WorkspacePatch([string]$dshHome) {
     '@deepseek-ai/dsh-tool-time',
     '@deepseek-ai/dsh-tool-calculator',
     '@deepseek-ai/dsh-tool-encoding',
-    'dshmarket'
+    'dshmarket',
+    '@dickpy/dsh-imagegen'
   )
 
   # --- structured merge: parse the existing workspace file into (a) top-level
@@ -623,12 +623,13 @@ $registryPlugins = @(
 
   # === synced from this machine's live install (diff against the web profile's
   # package.json dependencies; commit pins are guarded by $CommitPinnedPackages) ===
-  @('@dickpy/dsh-imagegen', '@dickpy/dsh-imagegen'),
-  @('dsh-antigravity', 'github:LiZhenNet/dsh-antigravity#94957767c5e247d86cec8833fb1b67f659078af6'),
+  # dsh-imagegen installs from git (github:hgl-pong/dsh-imagegen), not the npm
+  # package; as a floating git dep it is refreshed to the branch head by the
+  # update pass and needs its name in $allowBuild above (prepare script).
+  @('@dickpy/dsh-imagegen', 'github:hgl-pong/dsh-imagegen'),
   @('dsh-graph', 'dsh-graph'),
   @('dsh-tavily-workspace', 'github:moguiyu/dsh-tavily#f1367e83a1c46d90bca3bf144a6f5ce61bcb61e8'),
   @('dshmarket', 'dshmarket'),
-  @('dsh-pocket', 'dsh-pocket'),
   @('onebox-dsh-bridge', 'onebox-dsh-bridge')
 )
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
