@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [switch]$SkipSettings
 )
@@ -612,7 +612,7 @@ foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugi
 Ensure-DshChangeReviewPatched $dshHome
 
 Add-DshPluginIfMissing 'dsh-local-sse-compat' (Join-Path $repoRoot 'plugins\dsh-local-sse-compat')
-Add-DshPluginIfMissing 'dsh-agnes-provider' (Join-Path $repoRoot 'plugins\dsh-agnes-provider')
+Add-DshPluginIfMissing 'dsh-glm-coding-plan' (Join-Path $repoRoot 'plugins\dsh-glm-coding-plan')
 Add-DshPluginIfMissing 'dsh-compact-model' (Join-Path $repoRoot 'plugins\dsh-compact-model')
 Ensure-OpenEditorDependencies
 Add-DshPluginIfMissing 'dsh-open-in-editor' (Join-Path $repoRoot 'plugins\dsh-open-in-editor')
@@ -654,6 +654,5 @@ if (-not (Test-Path (Join-Path $pluginCm 'node_modules\@deepseek-ai\schemastery'
     }
   }
 }
-Add-DshPluginIfMissing 'opencode-zen-compat' (Join-Path $repoRoot 'vendor\opencode-zen-compat')
 
 Write-Host "`nInstallation complete. Restart with: dsh web --no-open" -ForegroundColor Green

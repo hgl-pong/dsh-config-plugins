@@ -1,7 +1,7 @@
 {
-  "name": "dsh-agnes-provider",
+  "name": "dsh-glm-coding-plan",
   "version": "0.1.0",
-  "description": "DSH plugin: 注册 Agnes AI provider（agnes-2.5-flash，OpenAI 兼容），通过 base 层补丁注入 llm-pi-ai 设置，不动用户 settings.yaml。",
+  "description": "DSH plugin: 注册智谱 GLM Coding Plan provider（bigmodel.cn，OpenAI 兼容端点），通过 base 层补丁注入 llm-pi-ai 设置，不动用户 settings.yaml。",
   "author": "llt",
   "private": true,
   "type": "module",
@@ -14,6 +14,7 @@
   "files": [
     "index.js",
     "cordis.patch.yml",
+    "test.mjs",
     "README.md"
   ],
   "dsh": {
