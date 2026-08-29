@@ -340,6 +340,114 @@ function Ensure-WorkspacePatch([string]$dshHome) {
 
 }
 
+function Ensure-CompactionHostRows([string]$dshHome) {
+  # dsh-web-app's bundle patch disables the host-plane compaction rows
+  # (compaction-basic / command-compact / tool-result-pruner): the web agent
+  # plane moves behind per-session presets, and the shipped presets (standard,
+  # code, cordis) each mount their own realm copy. But presets WITHOUT a
+  # compaction group (minimal, user-authored such as dsh-graph `crew`) got no
+  # compaction at all, and host-plane consumers (dsh-active-context-pruning's
+  # acp_compress, dsh-compact-model's engine tuning) could never resolve
+  # ctx.compaction - acp_compress failed with "ACP compress needs
+  # ctx.compaction". The profile cordis.patch.yml is the last composition
+  # layer, so re-enabling the rows there wins over the web-app patch. A patch
+  # replaces the targeted row's whole `config`, so each row restates every key.
+  $profileDir = Join-Path $dshHome 'profiles\web'
+  $patchFile = Join-Path $profileDir 'cordis.patch.yml'
+  New-Item -ItemType Directory -Force $profileDir | Out-Null
+  $text = if (Test-Path -LiteralPath $patchFile) { Get-Content -Raw -LiteralPath $patchFile } else { '' }
+  if ($null -eq $text) { $text = '' }   # Get-Content -Raw returns $null for an empty file
+  if ($text -match '(?m)^-\s*id:\s*compaction-basic\s*$') {
+    Write-Host "`n[skip] compaction host rows already present in cordis.patch.yml" -ForegroundColor DarkGray
+    return
+  }
+  $block = @'
+
+# --- re-enable the compaction backend on the host plane (added by install.ps1) ---
+# dsh-web-app's own patch disables these host rows; without them, presets
+# without a compaction group had no auto-compaction at all and host-plane
+# plugins (acp_compress, dsh-compact-model) could not resolve ctx.compaction.
+- id: compaction-basic
+  disabled: false
+  config:
+    thresholdRatio: 0.6
+    retainRatio: 0.16
+    auto: true
+    summarizationProvider: agnes
+    summarizationModel: agnes-2.5-flash
+
+- id: command-compact
+  disabled: false
+
+- id: tool-result-pruner
+  disabled: false
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024
+'@
+  if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $text += "`r`n" }
+  Set-Content -LiteralPath $patchFile -Value ($text + $block) -Encoding utf8
+  Write-Host "`n[patch] re-enabled compaction-basic / command-compact / tool-result-pruner in profiles\web\cordis.patch.yml" -ForegroundColor Green
+}
+
+function Ensure-CompactModelSettings([string]$dshHome) {
+  # dsh-compact-model is the only settings.yaml-driven piece of the compaction
+  # stack (compaction-basic itself never reads settings.yaml): its settings
+  # namespace retunes the host compaction engine at runtime (thresholdRatio)
+  # and rewrites compaction LLM calls to the configured provider/model. Ensure
+  # the section exists with the tuned values; other settings.yaml sections are
+  # never touched. Only these three keys differ from the plugin defaults, so
+  # only they are managed here (retainRatio/maxTokens/retries use defaults).
+  $settingsFile = Join-Path $dshHome 'settings.yaml'
+  if (-not (Test-Path -LiteralPath $settingsFile)) {
+    Write-Host "`n[skip] settings.yaml not found; dsh-compact-model falls back to plugin defaults" -ForegroundColor DarkGray
+    return
+  }
+  $text = Get-Content -Raw -LiteralPath $settingsFile
+  if ($null -eq $text) { $text = '' }   # Get-Content -Raw returns $null for an empty file
+  $wanted = [ordered]@{
+    provider       = 'agnes'
+    model          = 'agnes-2.5-flash'
+    thresholdRatio = '0.6'
+  }
+  # Locate the flat `dsh-compact-model:` block: from its header line to the
+  # next top-level key (a line starting with a non-space character) or EOF.
+  $header = [regex]::Match($text, '(?m)^dsh-compact-model:[ \t]*$')
+  if (-not $header.Success) {
+    $lines = @('dsh-compact-model:')
+    foreach ($kv in $wanted.GetEnumerator()) { $lines += "  $($kv.Key): $($kv.Value)" }
+    $block = ($lines -join "`r`n") + "`r`n"
+    $newText = if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $text + "`r`n" + $block } else { $text + $block }
+    Set-Content -LiteralPath $settingsFile -Value $newText -Encoding utf8
+    Write-Host "`n[settings] added dsh-compact-model section (provider agnes, model agnes-2.5-flash, thresholdRatio 0.6)" -ForegroundColor Green
+    return
+  }
+  $bodyStart = $header.Index + $header.Length
+  $nextTop = [regex]::Match($text.Substring($bodyStart), '(?m)^\S')
+  $blockEnd = if ($nextTop.Success) { $bodyStart + $nextTop.Index } else { $text.Length }
+  $body = $text.Substring($bodyStart, $blockEnd - $bodyStart)
+  $newBody = $body
+  $changed = $false
+  foreach ($kv in $wanted.GetEnumerator()) {
+    $line = [regex]::Match($newBody, "(?m)^[ \t]+$($kv.Key):[ \t]*(?!=)[ \t]*(.*?)[ \t]*\r?$")
+    if (-not $line.Success) {
+      $trimmed = $newBody.TrimEnd("`r", "`n")
+      $newBody = $trimmed + "`r`n  $($kv.Key): $($kv.Value)`r`n"
+      $changed = $true
+    } elseif ($line.Groups[1].Value -ne $kv.Value) {
+      $newBody = $newBody.Remove($line.Index, $line.Length).Insert($line.Index, "  $($kv.Key): $($kv.Value)")
+      $changed = $true
+    }
+  }
+  if (-not $changed) {
+    Write-Host "`n[skip] dsh-compact-model settings already tuned (provider agnes, model agnes-2.5-flash, thresholdRatio 0.6)" -ForegroundColor DarkGray
+    return
+  }
+  Set-Content -LiteralPath $settingsFile -Value ($text.Remove($bodyStart, $blockEnd - $bodyStart).Insert($bodyStart, $newBody)) -Encoding utf8
+  Write-Host "`n[settings] updated dsh-compact-model section (provider agnes, model agnes-2.5-flash, thresholdRatio 0.6)" -ForegroundColor Green
+}
+
 function Ensure-DshChangeReviewPatched([string]$dshHome) {
   # dsh-change-review is a git dependency whose version can remain unchanged
   # while this repository's patch changes. Reinstall it when the patched source
@@ -564,6 +672,8 @@ Add-DshPluginIfMissing '@wingsky-1/dsh-web-file-preview' '@wingsky-1/dsh-web-fil
 Add-DshPluginIfMissing 'dsh-workbench-plugin' 'dsh-workbench-plugin@0.1.31'
 Ensure-DshWorkbenchPatched $dshHome
 Ensure-CompactionBasicPatched $dshHome
+Ensure-CompactionHostRows $dshHome
+if (-not $SkipSettings) { Ensure-CompactModelSettings $dshHome }
 if (-not $SkipSettings) { Ensure-ModelSettings $dshHome }
 Ensure-CompactionSummarizationConfig $dshHome
 

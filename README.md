@@ -24,8 +24,10 @@ dsh web --no-open
   - `plugins/dsh-glm-coding-plan`：智谱 GLM Coding Plan + Agnes AI 双 provider（glm-5.3 系 off 自动降级为 low；agnes thinking 开关适配）。已整合原 dsh-agnes-provider。
 - `plugins/dsh-compact-model`：控制 ACP 压缩（compact）使用的模型与 provider，只允许选择支持关闭推理（reasoning off）的模型（`/compact-model`）。
 - `plugins/dsh-glm-coding-plan`：智谱 GLM Coding Plan provider（glm-5.3 / glm-5.3-flash / glm-5.2 / glm-5.1 / glm-5-turbo / glm-4.7，OpenAI 兼容端点）注册与思考档位适配（GLM-5.3 思考常开，off 自动降级为 low）。
-- `patches/`：本地 pnpm 补丁——文件预览插件的路径拦截修复。
-- `install.ps1`：完整插件安装清单、补丁应用和 DeepSeek `maxTokens: 65536` 配置修复。
+- `patches/`：本地 pnpm 补丁——文件预览插件的路径拦截修复，以及 `@deepseek-ai/dsh-compaction-basic` 的摘要输入上限修复（防止压缩摘要调用自身撑爆辅助模型窗口）。
+- `install.ps1`：完整插件安装清单、补丁应用和 DeepSeek `maxTokens: 65536` 配置修复，并负责自动上下文压缩的全链路配置（幂等，可重复运行）：
+  - `Ensure-CompactionHostRows`：在 web profile 的 `cordis.patch.yml` 重新启用宿主平面的 `compaction-basic` / `command-compact` / `tool-result-pruner`（dsh-web-app 默认禁用它们）。不禁用侧后果：没有压缩组的 preset（minimal、自建 preset）完全没有自动压缩，且 `acp_compress`、`/compact`、`dsh-compact-model` 调参都拿不到 `ctx.compaction`。启用后所有会话共享一台压缩引擎（thresholdRatio 0.6 = 1M 窗口的 60% 触发），与 preset 自带的 realm 压缩并存不冲突。
+  - `Ensure-CompactModelSettings`：在 `settings.yaml` 维护 `dsh-compact-model` 段（压缩摘要走 agnes/agnes-2.5-flash、thresholdRatio 0.6）——这是压缩体系里唯一由 settings.yaml 驱动的部分（compaction-basic 本体不读 settings）。
 
 ### 清单内附带的开发体验插件
 
