@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [switch]$SkipSettings
 )
@@ -101,6 +101,16 @@ $script:PatchPinnedPackages = @(
   '@deepseek-ai/dsh-compaction-basic'
 )
 
+# Git plugins installed at an exact commit. They are excluded from the
+# `update --latest` pass below: for git deps that pass re-resolves to the
+# default branch head, which would silently move them off the audited commit
+# pin. To move one of these, install the new commit manually, then update its
+# spec in $registryPlugins.
+$script:CommitPinnedPackages = @(
+  'dsh-antigravity',
+  'dsh-tavily-workspace'
+)
+
 function Get-TargetVersion([string]$bundleName, [string]$spec) {
   # Determine the version the plugin should be at before we skip a re-install:
   #   * if the spec pins an explicit version (name@1.2.3), that is the floor;
@@ -171,6 +181,10 @@ function Update-InstalledPlugins([string]$dshHome) {
     if ($spec -match '^(link|file|workspace):') { continue }
     if ($script:PatchPinnedPackages -contains $dep.Name) {
       Write-Host "[pinned] $($dep.Name) stays at its patch version" -ForegroundColor DarkGray
+      continue
+    }
+    if ($script:CommitPinnedPackages -contains $dep.Name) {
+      Write-Host "[pinned] $($dep.Name) stays at its pinned commit" -ForegroundColor DarkGray
       continue
     }
     $names += $dep.Name
@@ -253,14 +267,15 @@ function Ensure-WorkspacePatch([string]$dshHome) {
   $allowBuild = @(
     '@deepseek-ai/dsh-lsp',
     '@dsh-external/dsh-sidechain',
-    '@omdsh-dev/dsh-annotation',
+    '@changfenhuang/dsh-annotation',
     '@dsh-community/dsh-paste-input',
     '@deepseek-ai/dsh-tool-json',
     '@deepseek-ai/dsh-tool-regex',
     '@deepseek-ai/dsh-tool-csv',
     '@deepseek-ai/dsh-tool-time',
     '@deepseek-ai/dsh-tool-calculator',
-    '@deepseek-ai/dsh-tool-encoding'
+    '@deepseek-ai/dsh-tool-encoding',
+    'dshmarket'
   )
 
   # --- structured merge: parse the existing workspace file into (a) top-level
@@ -563,14 +578,12 @@ $registryPlugins = @(
   @('dsh-change-review', 'github:cirelir/dsh-change-review'),
   @('dsh-context', 'dsh-context'),
   @('dsh-cost-meter', 'dsh-cost-meter'),
-  @('dsh-crew', 'dsh-crew'),
   @('dsh-extension-hub', 'dsh-extension-hub'),
   @('dsh-history', 'dsh-history'),
   @('dsh-myrules', 'dsh-myrules'),
   @('dsh-plan-switch', 'github:a903067276-rgb/dsh-plan-switch#main'),
   @('dsh-prompt-polish', 'github:jinhuoooo/dsh-prompt-polish'),
   @('dsh-rewind-plugin', 'dsh-rewind-plugin'),
-  @('dsh-skill-picker', 'dsh-skill-picker'),
   @('dsh-stylevault', 'github:GptsApp/dsh-stylevault'),
   @('dsh-vision-router', 'dsh-vision-router'),
 
@@ -581,7 +594,7 @@ $registryPlugins = @(
   # --- developer-experience additions (verified, no conflict with the above) ---
   @('@deepseek-ai/dsh-lsp', 'github:omdsh-dev/dsh-lsp'),
   @('@dsh-external/dsh-sidechain', 'github:Buyi-wsgzg/dsh-sidechain'),
-  @('@omdsh-dev/dsh-annotation', 'github:omdsh-dev/dsh-annotation'),
+  @('@changfenhuang/dsh-annotation', 'github:omdsh-dev/dsh-annotation'),
   @('@dsh-community/dsh-paste-input', 'github:omdsh-dev/dsh-paste-input'),
   @('dsh-input-history', 'dsh-input-history'),
 
@@ -607,6 +620,16 @@ $registryPlugins = @(
   # dsh-open-in-editor + dsh-workbench-plugin + dsh-vision-router. Gaps that have NO
   # mature dsh plugin yet (cmake build+error feedback, clang-format/tidy, GTest/Catch2
   # runner, GDB frontend) must be solved via a local cordis patch, not an npm package.
+
+  # === synced from this machine's live install (diff against the web profile's
+  # package.json dependencies; commit pins are guarded by $CommitPinnedPackages) ===
+  @('@dickpy/dsh-imagegen', '@dickpy/dsh-imagegen'),
+  @('dsh-antigravity', 'github:LiZhenNet/dsh-antigravity#94957767c5e247d86cec8833fb1b67f659078af6'),
+  @('dsh-graph', 'dsh-graph'),
+  @('dsh-tavily-workspace', 'github:moguiyu/dsh-tavily#f1367e83a1c46d90bca3bf144a6f5ce61bcb61e8'),
+  @('dshmarket', 'dshmarket'),
+  @('dsh-pocket', 'dsh-pocket'),
+  @('onebox-dsh-bridge', 'onebox-dsh-bridge')
 )
 foreach ($plugin in $registryPlugins) { Add-DshPluginIfMissing $plugin[0] $plugin[1] }
 Ensure-DshChangeReviewPatched $dshHome
@@ -617,41 +640,30 @@ Add-DshPluginIfMissing 'dsh-compact-model' (Join-Path $repoRoot 'plugins\dsh-com
 Ensure-OpenEditorDependencies
 Add-DshPluginIfMissing 'dsh-open-in-editor' (Join-Path $repoRoot 'plugins\dsh-open-in-editor')
 
-# dsh-web-search-9router needs @deepseek-ai/schemastery resolvable from the plugin's
-# REAL path (F:\...\plugins\dsh-web-search-9router): dsh profiles install local plugins
-# as symlinks, and Node ESM resolution follows the real path, so the profile's hoisted
-# node_modules is invisible to the plugin. Install the schema peer into the plugin dir.
-$plugin9r = Join-Path $repoRoot 'plugins\dsh-web-search-9router'
-if (-not (Test-Path (Join-Path $plugin9r 'node_modules\@deepseek-ai\schemastery'))) {
-  Write-Host "`n>>> npm install (schemastery peer for dsh-web-search-9router)" -ForegroundColor Cyan
-  Push-Location $plugin9r
-  try { & npm install --no-save --no-package-lock --omit=dev '@deepseek-ai/schemastery@3.18.1'; if ($LASTEXITCODE -ne 0) { throw 'npm install failed for 9router schemastery peer' } }
-  finally { Pop-Location }
-}
-Add-DshPluginIfMissing 'dsh-web-search-9router' $plugin9r
-
 # dsh-compact-model needs @deepseek-ai/schemastery (and its transitive deps
 # @deepseek-ai/cosmokit, @standard-schema/spec) resolvable from the plugin's REAL
-# path — same symlink reason as 9router above. Without it the settings section
-# (schema built via schemastery) fails to register and the plugin would not show
-# up in the settings panel. Copy the full closure from the 9router node_modules
-# (populated just above): a direct `npm install @deepseek-ai/schemastery` here
-# won't work because schemastery is a peer of this package and
-# @deepseek-ai/dsh-settings@^0.1.0 (also a peer) has no published registry
-# version, so npm drops the package instead of fetching its dependency tree.
+# path: dsh profiles install local plugins as symlinks, and Node ESM resolution
+# follows the real path, so the profile's hoisted node_modules is invisible to the
+# plugin. Without it the settings section (schema built via schemastery) fails to
+# register and the plugin would not show up in the settings panel. Copy the full
+# closure from the dsh profile's hoisted node_modules: a direct
+# `npm install @deepseek-ai/schemastery` here won't work because schemastery is a
+# peer of this package and @deepseek-ai/dsh-settings@^0.1.0 (also a peer) has no
+# published registry version, so npm drops the package instead of fetching its
+# dependency tree (verified: even --legacy-peer-deps installs nothing).
 $pluginCm = Join-Path $repoRoot 'plugins\dsh-compact-model'
 if (-not (Test-Path (Join-Path $pluginCm 'node_modules\@deepseek-ai\schemastery'))) {
   $cmNode = Join-Path $pluginCm 'node_modules'
-  Write-Host "`n>>> copying schemastery (with deps) into dsh-compact-model" -ForegroundColor Cyan
+  $profileNode = Join-Path $dshHome 'profiles\web\node_modules'
+  Write-Host "`n>>> copying schemastery (with deps) from the dsh profile into dsh-compact-model" -ForegroundColor Cyan
   foreach ($rel in @('@deepseek-ai\schemastery', '@deepseek-ai\cosmokit', '@standard-schema\spec')) {
-    $src = Join-Path $plugin9r ('node_modules\' + $rel)
+    $src = Join-Path $profileNode $rel
     $dst = Join-Path $cmNode $rel
-    if (Test-Path $src) {
-      New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
-      Copy-Item -Recurse -Force $src $dst
-    } else {
-      throw "schemastery dependency $rel not found in dsh-web-search-9router node_modules"
+    if (-not (Test-Path $src)) {
+      throw "schemastery dependency $rel not found in the dsh profile node_modules ($profileNode)"
     }
+    New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+    Copy-Item -Recurse -Force $src $dst
   }
 }
 

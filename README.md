@@ -1,4 +1,4 @@
-﻿# dsh-config-plugins
+# dsh-config-plugins
 
 可迁移的 DeepSeek Harness (`dsh`) 插件配置与本地修复包。
 
@@ -22,7 +22,6 @@ dsh web --no-open
 
 - `plugins/dsh-local-sse-compat`：DeepSeek SSE 截断/空 payload 兼容和 compaction 专用请求调优。
   - `plugins/dsh-glm-coding-plan`：智谱 GLM Coding Plan + Agnes AI 双 provider（glm-5.3 系 off 自动降级为 low；agnes thinking 开关适配）。已整合原 dsh-agnes-provider。
-- `plugins/dsh-web-search-9router`：用 9Router 替换内置 DeepSeek 联网搜索（`/v1/search`，支持 Tavily/Exa/Brave/Serper 等），不消耗模型额度。
 - `plugins/dsh-compact-model`：控制 ACP 压缩（compact）使用的模型与 provider，只允许选择支持关闭推理（reasoning off）的模型（`/compact-model`）。
 - `plugins/dsh-glm-coding-plan`：智谱 GLM Coding Plan provider（glm-5.3 / glm-5.3-flash / glm-5.2 / glm-5.1 / glm-5-turbo / glm-4.7，OpenAI 兼容端点）注册与思考档位适配（GLM-5.3 思考常开，off 自动降级为 low）。
 - `patches/`：本地 pnpm 补丁——文件预览插件的路径拦截修复。
